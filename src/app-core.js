@@ -143,7 +143,7 @@ function buildBackup(memos, raceCards, horseRecords, averageTimes) {
     exportedAt: new Date().toISOString(),
     data: {
       memos,
-      raceCards,
+      raceCards: safeArray(raceCards).map(toStorageRaceCard),
       horseRecords,
       averageTimes,
     },
@@ -389,12 +389,12 @@ function isHorseNumber(value) {
 }
 
 function latestMemoForHorse(memos, horseName) {
-  const normalizedName = horseName.trim();
+  const normalizedName = normalizeHorseName(horseName);
   if (!normalizedName) return null;
 
-  return memos
-    .filter((memo) => memo.horseName.trim() === normalizedName)
-    .sort((a, b) => new Date(b.raceDate) - new Date(a.raceDate))[0] || null;
+  return safeArray(memos)
+    .filter((memo) => normalizeHorseName(memo?.horseName) === normalizedName)
+    .sort((a, b) => new Date(b.raceDate || 0) - new Date(a.raceDate || 0))[0] || null;
 }
 
 function scoreRace(race, memos) {
@@ -405,7 +405,7 @@ function scoreRace(race, memos) {
     const latestMemo = latestMemoForHorse(memos, entry.horseName || "");
     if (!latestMemo) return;
 
-    const tags = [...latestMemo.troubleTags, ...latestMemo.strongTags, ...latestMemo.buyTags];
+    const tags = [...safeArray(latestMemo.troubleTags), ...safeArray(latestMemo.strongTags), ...safeArray(latestMemo.buyTags)];
     const attentionScore = attentionScores[latestMemo.attention] || 0;
     const tagScore = tags.reduce((sum, tag) => sum + (scoreTagRules[tag] || 0), 0);
 
@@ -625,10 +625,11 @@ function sanitizeRaceInfo(info = {}) {
   return {
     ...emptyRaceInfo,
     ...info,
-    track: info.track || info.racecourse || info.raceCourse || emptyRaceInfo.track,
+    raceDate: String(info.date || info.raceDate || ""),
+    track: info.racecourse || info.track || info.raceCourse || "",
     raceNumber: String(info.raceNumber || ""),
     raceName: String(info.raceName || ""),
-    raceTime: String(info.raceTime || info.startTime || ""),
+    raceTime: String(info.startTime || info.raceTime || ""),
     raceClass: info.raceClass ? normalizeRaceClass(info.raceClass) : "",
     surface: info.surface || "",
     distance: String(info.distance || ""),
@@ -640,15 +641,28 @@ function sanitizeRaceInfo(info = {}) {
 function sanitizeRaceEntry(entry = {}) {
   return {
     id: entry.id || makeId("entry"),
-    frameNumber: String(entry.frameNumber || ""),
+    frameNumber: String(entry.frameNumber || entry.frame || entry["枠"] || ""),
     horseNumber: String(entry.horseNumber || ""),
-    horseName: String(entry.horseName || ""),
-    sexAge: String(entry.sexAge || ""),
-    popularity: String(entry.popularity || ""),
-    jockey: String(entry.jockey || ""),
-    carriedWeight: String(entry.carriedWeight || ""),
+    horseName: String(entry.horseName || entry["馬名"] || ""),
+    sexAge: String(entry.sexAge || entry["性齢"] || ""),
+    popularity: String(entry.popularity || entry["人気"] || ""),
+    jockey: String(entry.jockey || entry["騎手"] || ""),
+    carriedWeight: String(entry.carriedWeight || entry.weight || entry["斤量"] || ""),
     raw: entry.raw || "",
     parsed: Boolean(entry.parsed),
+  };
+}
+
+function toStorageRaceEntry(entry = {}) {
+  const safeEntry = sanitizeRaceEntry(entry);
+  return {
+    frame: safeEntry.frameNumber || "",
+    horseNumber: safeEntry.horseNumber || "",
+    horseName: normalizeHorseName(safeEntry.horseName),
+    sexAge: safeEntry.sexAge || "",
+    popularity: safeEntry.popularity || "",
+    jockey: safeEntry.jockey || "",
+    weight: safeEntry.carriedWeight || "",
   };
 }
 
@@ -672,6 +686,10 @@ function sanitizeResultRow(row = {}) {
 }
 
 function sanitizeRaceCard(race = {}) {
+  const infoSource = { ...(race.raceInfo || {}), ...race };
+  const raceInfo = sanitizeRaceInfo(infoSource);
+  const entries = safeArray(race.entries).map(sanitizeRaceEntry);
+  const id = race.id || race.raceId || makeId("race");
   const rawResult = race.result || (race.results ? { rows: race.results } : null);
   const result = rawResult ? {
     ...rawResult,
@@ -683,12 +701,45 @@ function sanitizeRaceCard(race = {}) {
   } : null;
   return {
     ...race,
-    id: race.id || makeId("race"),
-    raceInfo: sanitizeRaceInfo(race.raceInfo || race),
-    entries: safeArray(race.entries).map(sanitizeRaceEntry),
+    id,
+    raceId: race.raceId || race.id || id,
+    date: raceInfo.raceDate || "",
+    racecourse: raceInfo.track || "",
+    raceNumber: raceInfo.raceNumber || "",
+    raceName: raceInfo.raceName || "",
+    raceClass: raceInfo.raceClass || "",
+    surface: raceInfo.surface || "",
+    distance: raceInfo.distance || "",
+    going: raceInfo.going || "",
+    startTime: raceInfo.raceTime || "",
+    raceInfo,
+    entries,
     result,
     createdAt: race.createdAt || new Date().toISOString(),
+    updatedAt: race.updatedAt || race.createdAt || new Date().toISOString(),
   };
+}
+
+function toStorageRaceCard(race = {}) {
+  const safeRace = sanitizeRaceCard(race);
+  const storageRace = {
+    id: safeRace.id,
+    raceId: safeRace.raceId || safeRace.id,
+    date: safeRace.raceInfo.raceDate || "",
+    racecourse: safeRace.raceInfo.track || "",
+    raceNumber: safeRace.raceInfo.raceNumber || "",
+    raceName: safeRace.raceInfo.raceName || "",
+    raceClass: safeRace.raceInfo.raceClass || "",
+    surface: safeRace.raceInfo.surface || "",
+    distance: safeRace.raceInfo.distance ? Number(safeRace.raceInfo.distance) || null : null,
+    going: safeRace.raceInfo.going || "",
+    startTime: safeRace.raceInfo.raceTime || "",
+    entries: safeArray(safeRace.entries).map(toStorageRaceEntry).filter((entry) => normalizeHorseName(entry.horseName)),
+    createdAt: safeRace.createdAt || new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  };
+  if (safeRace.result) storageRace.result = safeRace.result;
+  return storageRace;
 }
 
 function sanitizeRaceCards(raceCards) {
@@ -701,14 +752,21 @@ function isReadableRaceCard(race) {
 }
 
 function sanitizeReadableRaceCards(raceCards) {
-  const sanitized = sanitizeRaceCards(raceCards);
+  const rawCards = safeArray(raceCards);
+  const sanitized = sanitizeRaceCards(rawCards);
   const readable = [];
   const unreadable = [];
-  sanitized.forEach((race) => {
+  const brokenEntries = [];
+  sanitized.forEach((race, index) => {
+    const raw = rawCards[index] || {};
+    if (!Array.isArray(raw.entries) && raw.entries != null) {
+      brokenEntries.push({ raceId: race.id, raceInfo: race.raceInfo, entries: raw.entries });
+    }
     if (isReadableRaceCard(race)) readable.push(race);
-    else unreadable.push(race);
+    else unreadable.push(raw);
   });
   if (unreadable.length > 0) appendBrokenStorage(BROKEN_WEEKLY_RACES_KEY, unreadable);
+  if (brokenEntries.length > 0) appendBrokenStorage(BROKEN_RACE_ENTRIES_KEY, brokenEntries);
   return readable;
 }
 
@@ -933,7 +991,7 @@ export function createKeibaApp(React, icons) {
     const [toast, setToast] = useState("");
 
     useEffect(() => saveJson(MEMO_STORAGE_KEY, memos), [memos]);
-    useEffect(() => saveJson(RACE_STORAGE_KEY, raceCards), [raceCards]);
+    useEffect(() => saveJson(RACE_STORAGE_KEY, safeArray(raceCards).map(toStorageRaceCard)), [raceCards]);
     useEffect(() => saveJson(HORSE_RECORDS_STORAGE_KEY, horseRecords), [horseRecords]);
     useEffect(() => saveJson(AVERAGE_TIMES_STORAGE_KEY, averageTimes), [averageTimes]);
 
@@ -981,7 +1039,9 @@ export function createKeibaApp(React, icons) {
     }
 
     function addRaceCard(raceCard) {
-      const nextRaceCard = sanitizeRaceCard({ ...raceCard, id: crypto.randomUUID(), createdAt: new Date().toISOString() });
+      const now = new Date().toISOString();
+      const id = crypto.randomUUID();
+      const nextRaceCard = sanitizeRaceCard(toStorageRaceCard({ ...raceCard, id, raceId: id, createdAt: now, updatedAt: now }));
       setRaceCards((current) => [nextRaceCard, ...current]);
       notify("出走表を登録しました");
       setScreen("home");
@@ -1193,7 +1253,7 @@ export function createKeibaApp(React, icons) {
       h(SectionTitle, { icon: h(ClipboardList, { size: 18 }), title: `抽出結果 ${entries.length}頭` }),
       warning && h("div", { className: "warning-panel" }, warning),
       h("div", { className: "form-actions inline-actions" },
-        h("button", { type: "button", className: "secondary", onClick: () => setShowPreview((current) => !current) }, "登録予定データを確認")
+        h("button", { type: "button", className: "secondary", onClick: () => setShowPreview((current) => !current) }, "保存予定データを確認")
       ),
       showPreview && h(RegistrationPreview, {
         title: "出走表の登録予定",
@@ -1625,6 +1685,22 @@ export function createKeibaApp(React, icons) {
 
   function RegistrationPreview({ title, raceInfo, rows, validCount, unparsedCount }) {
     const info = sanitizeRaceInfo(raceInfo);
+    const isRaceEntryPreview = title.includes("出走表");
+    const storagePreview = isRaceEntryPreview
+      ? toStorageRaceCard({ raceInfo: info, entries: rows })
+      : {
+        raceInfo: {
+          raceDate: info.raceDate || "",
+          racecourse: info.track || "",
+          raceNumber: info.raceNumber || "",
+          raceName: info.raceName || "",
+          raceClass: info.raceClass || "",
+          surface: info.surface || "",
+          distance: info.distance || "",
+          going: info.going || "",
+        },
+        rows: safeArray(rows).slice(0, 5),
+      };
     const summary = {
       raceInfo: {
         raceDate: info.raceDate || "",
@@ -1638,14 +1714,16 @@ export function createKeibaApp(React, icons) {
       },
       registerableHorses: validCount,
       unparsedRows: unparsedCount,
-      sampleRows: safeArray(rows).slice(0, 3),
+      entriesIsArray: isRaceEntryPreview ? Array.isArray(storagePreview.entries) : Array.isArray(storagePreview.rows),
+      storagePreview,
     };
 
     return h("section", { className: "preview-panel" },
       h("h3", null, title),
       h("div", { className: "preview-stats" },
         h("span", null, `登録予定: ${validCount}件`),
-        h("span", null, `未解析: ${unparsedCount}件`)
+        h("span", null, `未解析: ${unparsedCount}件`),
+        h("span", null, `entries配列: ${summary.entriesIsArray ? "はい" : "いいえ"}`)
       ),
       h("p", null, `${info.track || "競馬場未入力"} ${info.raceNumber || "レース番号未入力"}R ${info.raceName || "レース名未入力"}`),
       h("pre", null, JSON.stringify(summary, null, 2))
@@ -1714,7 +1792,7 @@ export function createKeibaApp(React, icons) {
 
   function RaceRunnerCard({ entry, latestMemo, onOpen }) {
     const hasMemo = Boolean(latestMemo);
-    const tags = hasMemo ? [...latestMemo.troubleTags, ...latestMemo.strongTags, ...latestMemo.buyTags] : [];
+    const tags = hasMemo ? [...safeArray(latestMemo.troubleTags), ...safeArray(latestMemo.strongTags), ...safeArray(latestMemo.buyTags)] : [];
     const attention = latestMemo?.attention || "";
 
     return h("button", { className: `race-runner-card ${attention === "A" ? "attention-a" : ""}`, type: "button", onClick: onOpen },
