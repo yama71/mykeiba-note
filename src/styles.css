@@ -715,6 +715,233 @@ textarea:focus {
   font-weight: 800;
 }
 
+.horse-page {
+  display: grid;
+  gap: 14px;
+}
+
+.horse-profile-title {
+  margin-bottom: 0;
+  align-items: center;
+}
+
+.horse-profile-title p {
+  margin: 5px 0 0;
+  color: #6b6254;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.horse-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 8px;
+}
+
+.recent-finishes {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid #ded6c8;
+  border-radius: 8px;
+  background: #fffdf8;
+}
+
+.recent-finishes span {
+  color: #6b6254;
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.recent-finishes strong {
+  color: #24221d;
+  font-size: 14px;
+  text-align: right;
+}
+
+.tab-switch {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  padding: 4px;
+  border: 1px solid #ded6c8;
+  border-radius: 8px;
+  background: #fffdf8;
+}
+
+.tab-switch button {
+  min-height: 44px;
+  border: 0;
+  border-radius: 6px;
+  color: #6b6254;
+  background: transparent;
+  font-weight: 900;
+}
+
+.tab-switch button.active {
+  color: #fffdf8;
+  background: #2e655b;
+}
+
+.record-stack {
+  display: grid;
+  gap: 12px;
+}
+
+.record-card {
+  overflow: hidden;
+  border: 1px solid #ded6c8;
+  border-radius: 8px;
+  background: #fffdf8;
+  box-shadow: 0 7px 18px rgba(45, 40, 31, 0.06);
+}
+
+.record-card.finish-win {
+  border-color: #c94b3b;
+  box-shadow: inset 4px 0 0 #c94b3b, 0 10px 24px rgba(201, 75, 59, 0.12);
+}
+
+.record-main {
+  width: 100%;
+  display: grid;
+  grid-template-columns: 54px 1fr;
+  gap: 12px;
+  padding: 14px;
+  border: 0;
+  color: inherit;
+  background: transparent;
+  text-align: left;
+}
+
+.record-rank {
+  display: grid;
+  place-items: center;
+  align-content: center;
+  min-height: 58px;
+  border-radius: 8px;
+  color: #fffdf8;
+  background: #2e655b;
+}
+
+.finish-win .record-rank {
+  background: #c94b3b;
+}
+
+.record-rank strong {
+  font-size: 28px;
+  line-height: 1;
+}
+
+.record-rank span {
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.record-body h3 {
+  margin: 0;
+  font-size: 16px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.record-condition {
+  margin: 4px 0 9px;
+  color: #6b6254;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.record-facts {
+  display: grid;
+  gap: 6px;
+}
+
+.record-facts span {
+  color: #3b352d;
+  font-size: 13px;
+  line-height: 1.35;
+}
+
+.record-memo-badge {
+  width: fit-content;
+  margin-top: 9px;
+  border-radius: 999px;
+  padding: 5px 9px;
+  color: #1f6a5d;
+  background: #e5f0ec;
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.record-memo-summary {
+  margin: 0 14px 12px 80px;
+  color: #4e493f;
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.record-detail {
+  display: grid;
+  gap: 12px;
+  padding: 0 14px 14px 80px;
+}
+
+.record-detail dl {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+}
+
+.record-detail dt {
+  color: #6b6254;
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.record-detail dd {
+  margin: 0 0 6px;
+  color: #24221d;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.record-linked-memo {
+  position: relative;
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  border-radius: 8px;
+  background: #f8f4eb;
+}
+
+.record-linked-memo h4,
+.record-linked-memo p {
+  margin: 0;
+}
+
+.record-linked-memo h4 {
+  padding-right: 38px;
+  font-size: 14px;
+}
+
+.record-linked-memo p {
+  color: #332f29;
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.record-linked-memo .mini-rank {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+}
+
+.row-horse-button {
+  justify-self: start;
+}
+
 .empty-state {
   display: grid;
   gap: 8px;
@@ -1108,6 +1335,10 @@ textarea:focus {
     gap: 8px;
   }
 
+  .horse-summary-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+
   .metric {
     min-height: 70px;
     padding: 12px 8px;
@@ -1162,6 +1393,26 @@ textarea:focus {
 
   .runner-title h4 {
     font-size: 15px;
+  }
+
+  .record-main {
+    grid-template-columns: 48px 1fr;
+    gap: 10px;
+    padding: 12px;
+  }
+
+  .record-rank {
+    min-height: 52px;
+  }
+
+  .record-rank strong {
+    font-size: 24px;
+  }
+
+  .record-memo-summary,
+  .record-detail {
+    margin-left: 0;
+    padding-left: 12px;
   }
 
   .tag-row span,
