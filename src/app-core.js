@@ -8,6 +8,18 @@ const BROKEN_WEEKLY_RACES_KEY = "keiba-broken-weekly-races-v1";
 const BROKEN_RACE_ENTRIES_KEY = "keiba-broken-race-entries-v1";
 const BROKEN_RACE_RESULTS_KEY = "keiba-broken-race-results-v1";
 const BACKUP_VERSION = 1;
+const STORAGE_ALIASES = {
+  horseNotes: MEMO_STORAGE_KEY,
+  horseRecords: HORSE_RECORDS_STORAGE_KEY,
+  weeklyRaces: RACE_STORAGE_KEY,
+  raceEntries: RACE_STORAGE_KEY,
+  raceResults: RACE_STORAGE_KEY,
+  averageTimes: AVERAGE_TIMES_STORAGE_KEY,
+  brokenWeeklyRaces: BROKEN_WEEKLY_RACES_KEY,
+  brokenRaceEntries: BROKEN_RACE_ENTRIES_KEY,
+  brokenRaceResults: BROKEN_RACE_RESULTS_KEY,
+};
+const storageWarnings = [];
 
 const tracks = ["東京", "中山", "阪神", "京都", "中京", "札幌", "函館", "福島", "新潟", "小倉"];
 const goingOptions = ["良", "稍重", "重", "不良"];
@@ -102,9 +114,105 @@ function getLocalStorageSnapshot() {
   const snapshot = {};
   for (let index = 0; index < localStorage.length; index += 1) {
     const key = localStorage.key(index);
-    snapshot[key] = safeParseStorage(key, localStorage.getItem(key));
+    const raw = localStorage.getItem(key);
+    try {
+      snapshot[key] = JSON.parse(raw);
+    } catch {
+      snapshot[key] = raw;
+    }
   }
   return snapshot;
+}
+
+function formatDateStamp(date = new Date()) {
+  const pad = (value) => String(value).padStart(2, "0");
+  return `${date.getFullYear()}${pad(date.getMonth() + 1)}${pad(date.getDate())}-${pad(date.getHours())}${pad(date.getMinutes())}${pad(date.getSeconds())}`;
+}
+
+function safeExportAllLocalStorage() {
+  const backup = {
+    appName: "MyKeiba Note",
+    version: BACKUP_VERSION,
+    exportedAt: new Date().toISOString(),
+    localStorage: getLocalStorageSnapshot(),
+  };
+  const blob = new Blob([JSON.stringify(backup, null, 2)], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = `mykeiba-note-backup-${formatDateStamp()}.json`;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}
+
+function getStorageDiagnostics() {
+  const keys = [];
+  for (let index = 0; index < localStorage.length; index += 1) {
+    keys.push(localStorage.key(index));
+  }
+  const watched = Object.entries(STORAGE_ALIASES).map(([label, key]) => {
+    const exists = localStorage.getItem(key) != null;
+    const raw = localStorage.getItem(key);
+    let parseable = false;
+    let type = "なし";
+    if (exists) {
+      try {
+        const parsed = JSON.parse(raw);
+        parseable = true;
+        type = Array.isArray(parsed) ? "配列" : typeof parsed;
+      } catch {
+        type = "文字列";
+      }
+    }
+    return { label, key, exists, parseable, type };
+  });
+  return { keys, watched };
+}
+
+function saveRawJsonArray(key) {
+  localStorage.setItem(key, "[]");
+}
+
+function emergencyResetRaceEntriesOnly() {
+  saveRawJsonArray(RACE_STORAGE_KEY);
+  saveRawJsonArray(BROKEN_WEEKLY_RACES_KEY);
+  saveRawJsonArray(BROKEN_RACE_ENTRIES_KEY);
+  saveRawJsonArray("weeklyRaces");
+  saveRawJsonArray("raceEntries");
+  saveRawJsonArray("brokenWeeklyRaces");
+  saveRawJsonArray("brokenRaceEntries");
+}
+
+function emergencyResetRaceResultsOnly() {
+  const raw = localStorage.getItem(RACE_STORAGE_KEY);
+  try {
+    const races = JSON.parse(raw || "[]");
+    if (Array.isArray(races)) {
+      const cleaned = races.map((race) => {
+        if (!race || typeof race !== "object") return race;
+        const { result, results, ...rest } = race;
+        return rest;
+      });
+      localStorage.setItem(RACE_STORAGE_KEY, JSON.stringify(cleaned));
+    }
+  } catch {
+    appendBrokenStorage(BROKEN_RACE_RESULTS_KEY, { raw, quarantinedReason: "race results parse failed" });
+  }
+  saveRawJsonArray(BROKEN_RACE_RESULTS_KEY);
+  saveRawJsonArray("raceResults");
+  saveRawJsonArray("brokenRaceResults");
+}
+
+function runRecoveryAction(action) {
+  try {
+    action();
+  } catch (error) {
+    console.error("MyKeiba recovery action failed", error);
+  } finally {
+    window.location.reload();
+  }
 }
 
 function exportStorageBackup() {
@@ -411,7 +519,7 @@ function scoreRace(race, memos) {
 
     score += attentionScore + tagScore;
     notableHorses.push({
-      horseName: entry.horseName.trim(),
+      horseName: normalizeHorseName(entry.horseName),
       attention: latestMemo.attention,
       score: attentionScore + tagScore,
     });
@@ -532,10 +640,11 @@ function parseCornerPositions(value) {
 }
 
 function findRaceEntryForResult(raceCard, horseNumber, horseName) {
-  if (!raceCard?.entries) return null;
-  const normalizedName = horseName.trim();
-  return raceCard.entries.find((entry) => entry.horseNumber === horseNumber)
-    || raceCard.entries.find((entry) => entry.horseName.trim() === normalizedName)
+  const entries = safeArray(raceCard?.entries);
+  if (entries.length === 0) return null;
+  const normalizedName = normalizeHorseName(horseName);
+  return entries.find((entry) => entry.horseNumber === horseNumber)
+    || entries.find((entry) => normalizeHorseName(entry.horseName) === normalizedName)
     || null;
 }
 
@@ -767,6 +876,9 @@ function sanitizeReadableRaceCards(raceCards) {
   });
   if (unreadable.length > 0) appendBrokenStorage(BROKEN_WEEKLY_RACES_KEY, unreadable);
   if (brokenEntries.length > 0) appendBrokenStorage(BROKEN_RACE_ENTRIES_KEY, brokenEntries);
+  if (unreadable.length > 0 || brokenEntries.length > 0) {
+    storageWarnings.push("出走表データの一部を読み込めなかったため、スキップしました。");
+  }
   return readable;
 }
 
@@ -952,22 +1064,30 @@ export function createKeibaApp(React, icons) {
 
     render() {
       if (this.state.hasError) {
-        const recover = (action) => {
-          action();
-          window.location.reload();
-        };
+        const diagnostics = getStorageDiagnostics();
         return h("div", { className: "app-shell" },
           h("section", { className: "screen" },
             h("div", { className: "error-panel" },
               h("h2", null, "登録データの一部を読み込めませんでした。データを確認してください"),
-              h("p", null, "保存済みデータは全部削除しません。まずバックアップを書き出してから、問題のあるデータだけ隔離してください。"),
+              h("p", null, "保存済みデータは全部削除しません。まず安全バックアップを書き出してから、必要なデータだけ復旧してください。"),
               h("div", { className: "recovery-actions" },
-                h("button", { type: "button", className: "primary full-button", onClick: exportStorageBackup }, "バックアップを書き出す"),
-                h("button", { type: "button", className: "secondary full-button", onClick: () => recover(isolateLatestProblemData) }, "問題のある直近データだけ隔離する"),
-                h("button", { type: "button", className: "secondary full-button", onClick: () => recover(resetWeeklyRaceDataOnly) }, "今週のレースデータだけリセット"),
-                h("button", { type: "button", className: "secondary full-button", onClick: () => recover(resetRaceEntriesOnly) }, "出走表データだけリセット"),
-                h("button", { type: "button", className: "secondary full-button", onClick: () => recover(resetRaceResultsOnly) }, "結果登録データだけリセット"),
-                h("button", { type: "button", className: "secondary full-button", onClick: () => recover(repairStorageData) }, "通常画面に戻る")
+                h("button", { type: "button", className: "primary full-button", onClick: safeExportAllLocalStorage }, "安全バックアップを書き出す"),
+                h("button", { type: "button", className: "secondary full-button", onClick: () => runRecoveryAction(emergencyResetRaceEntriesOnly) }, "出走表データだけ削除して復旧"),
+                h("button", { type: "button", className: "secondary full-button", onClick: () => runRecoveryAction(emergencyResetRaceResultsOnly) }, "結果登録データだけ削除して復旧"),
+                h("button", { type: "button", className: "secondary full-button", onClick: safeExportAllLocalStorage }, "バックアップを書き出す"),
+                h("button", { type: "button", className: "secondary full-button", onClick: () => runRecoveryAction(isolateLatestProblemData) }, "問題のある直近データだけ隔離する"),
+                h("button", { type: "button", className: "secondary full-button", onClick: () => runRecoveryAction(resetWeeklyRaceDataOnly) }, "今週のレースデータだけリセット"),
+                h("button", { type: "button", className: "secondary full-button", onClick: () => runRecoveryAction(resetRaceEntriesOnly) }, "出走表データだけリセット"),
+                h("button", { type: "button", className: "secondary full-button", onClick: () => runRecoveryAction(resetRaceResultsOnly) }, "結果登録データだけリセット"),
+                h("button", { type: "button", className: "secondary full-button", onClick: () => runRecoveryAction(repairStorageData) }, "通常画面に戻る")
+              ),
+              h("div", { className: "storage-debug" },
+                h("h3", null, "保存データの状態"),
+                h("p", null, `localStorageキー: ${diagnostics.keys.length ? diagnostics.keys.join(" / ") : "なし"}`),
+                h("div", { className: "storage-debug-list" }, diagnostics.watched.map((item) => h("div", { key: item.label, className: "storage-debug-row" },
+                  h("span", null, item.label),
+                  h("strong", null, `${item.exists ? "あり" : "なし"} / ${item.parseable ? "JSON OK" : "JSON不可"} / ${item.type}`)
+                )))
               )
             )
           )
@@ -1073,7 +1193,7 @@ export function createKeibaApp(React, icons) {
     }
 
     function openHorse(horseName) {
-      setSelectedHorse(horseName.trim());
+      setSelectedHorse(normalizeHorseName(horseName));
       setScreen("horse");
     }
 
@@ -1128,6 +1248,7 @@ export function createKeibaApp(React, icons) {
     );
 
     return h("section", { className: "screen home" },
+      storageWarnings.length > 0 && h("div", { className: "warning-panel" }, [...new Set(storageWarnings)].join(" ")),
       h("div", { className: "home-actions" },
         h(HomeAction, { title: "レース結果インポート", text: "登録済みレースに結果を貼り付け", icon: h(ClipboardList, { size: 20 }), onClick: () => setScreen("result") }),
         h(HomeAction, { title: "馬名検索", text: "メモと成績から馬を探す", icon: h(Search, { size: 20 }), onClick: () => setScreen("search") }),

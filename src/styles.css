@@ -1216,6 +1216,63 @@ textarea:focus {
   gap: 10px;
 }
 
+.recovery-actions button {
+  position: relative;
+  z-index: 2;
+  pointer-events: auto;
+  touch-action: manipulation;
+}
+
+.storage-debug {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid #e5c7c0;
+  border-radius: 8px;
+  background: #fffdfb;
+}
+
+.storage-debug h3,
+.storage-debug p {
+  margin: 0;
+}
+
+.storage-debug h3 {
+  font-size: 15px;
+}
+
+.storage-debug p {
+  overflow-wrap: anywhere;
+  color: #6b6254;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.storage-debug-list {
+  display: grid;
+  gap: 6px;
+}
+
+.storage-debug-row {
+  display: grid;
+  grid-template-columns: minmax(100px, 1fr) 2fr;
+  gap: 8px;
+  padding: 8px;
+  border-radius: 6px;
+  background: #f7f1ed;
+  font-size: 12px;
+}
+
+.storage-debug-row span {
+  color: #4e493f;
+  font-weight: 900;
+}
+
+.storage-debug-row strong {
+  color: #7d2f28;
+  font-weight: 900;
+}
+
 .diagnostic-list {
   display: grid;
   gap: 8px;
