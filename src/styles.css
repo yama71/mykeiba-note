@@ -1159,6 +1159,38 @@ textarea:focus {
   font-weight: 700;
 }
 
+.recovery-actions {
+  display: grid;
+  gap: 10px;
+}
+
+.diagnostic-list {
+  display: grid;
+  gap: 8px;
+}
+
+.diagnostic-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid #ded6c8;
+  border-radius: 8px;
+  background: #fffdf8;
+}
+
+.diagnostic-row span {
+  color: #4e493f;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.diagnostic-row strong {
+  color: #1f6a5d;
+  font-size: 18px;
+}
+
 .lookup-note {
   margin: -4px 0 4px;
   padding: 10px 12px;
