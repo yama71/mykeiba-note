@@ -1286,11 +1286,13 @@ textarea:focus {
 .horse-card-actionable {
   display: grid;
   gap: 0;
+  grid-template-columns: 1fr;
+  width: 100%;
 }
 
 .horse-card-main {
   display: grid;
-  grid-template-columns: auto 1fr;
+  grid-template-columns: auto minmax(0, 1fr);
   gap: 12px;
   width: 100%;
   padding: 0;
@@ -1298,6 +1300,12 @@ textarea:focus {
   color: inherit;
   background: transparent;
   text-align: left;
+  align-items: center;
+}
+
+.horse-card-main h3 {
+  word-break: keep-all;
+  overflow-wrap: anywhere;
 }
 
 .error-panel {

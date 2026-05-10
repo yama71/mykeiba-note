@@ -960,7 +960,7 @@ function verifyStoredRaceCard(raceId, expectedEntryCount) {
   const found = stored.find((race) => race?.id === raceId || race?.raceId === raceId);
   const entries = safeArray(found?.entries);
   return {
-    ok: Boolean(found && Array.isArray(found.entries) && entries.length === expectedEntryCount),
+    ok: Boolean(found && Array.isArray(found.entries) && entries.length > 0 && entries.length === expectedEntryCount),
     count: stored.length,
     found: Boolean(found),
     entriesIsArray: Boolean(found && Array.isArray(found.entries)),
@@ -1234,6 +1234,17 @@ function horseRecordRaceKey(record) {
   ].join("::");
 }
 
+function isEntryOnlyHorseRecord(record) {
+  const horseName = normalizeHorseName(record?.horseName);
+  const raceDate = String(record?.raceDate || record?.date || "").trim();
+  const racecourse = String(record?.track || record?.racecourse || "").trim();
+  const raceNumber = String(record?.raceNumber || record?.raceNo || record?.R || "").trim();
+  const finish = String(record?.finish || "").trim();
+  const time = String(record?.time || "").trim();
+  const last3f = String(record?.last3f || "").trim();
+  return Boolean(horseName && raceDate && racecourse && raceNumber && !finish && !time && !last3f);
+}
+
 function groupHorseRecordsByRace(records) {
   const map = new Map();
   safeArray(records).forEach((record) => {
@@ -1346,10 +1357,8 @@ export function createKeibaApp(React, icons) {
       if (skipNextRaceSave) {
         localStorage.removeItem(FORCE_HOME_STORAGE_KEY);
         setSkipNextRaceSave(false);
-        return;
       }
-      persistRaceCardsToStorage(raceCards);
-    }, [raceCards, skipNextRaceSave]);
+    }, [skipNextRaceSave]);
     useEffect(() => saveJson(HORSE_RECORDS_STORAGE_KEY, horseRecords), [horseRecords]);
     useEffect(() => saveJson(AVERAGE_TIMES_STORAGE_KEY, averageTimes), [averageTimes]);
 
@@ -1403,11 +1412,11 @@ export function createKeibaApp(React, icons) {
         const nextRaceCard = sanitizeRaceCard(toStorageRaceCard({ ...raceCard, createdAt: now, updatedAt: now }));
         const entryCount = safeArray(nextRaceCard.entries).length;
         const { storageRace, next } = upsertRaceCardInStorage(nextRaceCard);
-        const verification = verifyStoredRaceCard(nextRaceCard.id, entryCount);
+        const verification = verifyStoredRaceCard(storageRace.raceId, entryCount);
         if (!verification.ok) {
           saveRaceSaveDebug({
             status: "NG",
-            raceId: nextRaceCard.id,
+            raceId: storageRace.raceId,
             message: "保存確認NG：keiba-race-cards-v1 に保存されていません",
             beforeCount,
             afterCount: verification.count,
@@ -1416,7 +1425,7 @@ export function createKeibaApp(React, icons) {
           return {
             ok: false,
             message: "localStorage保存後の確認に失敗しました",
-            debug: { beforeCount, afterCount: verification.count, raceId: nextRaceCard.id, entryCount, verification },
+            debug: { beforeCount, afterCount: verification.count, raceId: storageRace.raceId, entryCount, verification },
           };
         }
         const nextCards = sanitizeRaceCards(next);
@@ -1479,6 +1488,19 @@ export function createKeibaApp(React, icons) {
       notify(`${targetRace.label}の成績を削除しました`);
     }
 
+    function deleteEntryOnlyHorseRecords() {
+      const targets = safeArray(horseRecords).filter(isEntryOnlyHorseRecord);
+      if (targets.length === 0) {
+        notify("出走表登録だけで作られた成績は見つかりませんでした");
+        return;
+      }
+      const names = targets.map((record) => record.horseName).filter(Boolean).slice(0, 12).join("、");
+      const confirmed = window.confirm(`出走表登録で誤って作られた可能性のある成績を${targets.length}件削除します。\n対象例：${names}${targets.length > 12 ? "…" : ""}\n\n回顧メモ、平均タイム、実際の結果データは残します。よろしいですか？`);
+      if (!confirmed) return;
+      setHorseRecords((current) => safeArray(current).filter((record) => !isEntryOnlyHorseRecord(record)));
+      notify(`出走表登録だけで作られた成績を${targets.length}件削除しました`);
+    }
+
     function saveRaceResult(raceId, result, raceInfoPatch = {}) {
       const allRaceCards = loadRaceCardsFromStorage();
       const recoveredRaceCards = raceCardsFromHorseRecords(horseRecords);
@@ -1521,8 +1543,8 @@ export function createKeibaApp(React, icons) {
         screen === "race" && h(RaceDetail, { raceCards, selectedRaceId, averageTimes, openHorse, openResultImport, setScreen }),
         screen === "average" && h(AverageTimesScreen, { averageTimes }),
         screen === "diagnostic" && h(DataDiagnosticScreen, { setScreen }),
-        screen === "backup" && h(BackupScreen, { memos, raceCards, horseRecords, averageTimes, setMemos, setRaceCards, setHorseRecords, setAverageTimes, notify, setScreen }),
-          screen === "list" && h(HorseList, { horseStats, horseRecords, openHorse, setScreen, deleteHorseRecordsForHorse, deleteHorseRecordsForRace }),
+        screen === "backup" && h(BackupScreen, { memos, raceCards, horseRecords, averageTimes, setMemos, setRaceCards, setHorseRecords, setAverageTimes, notify, setScreen, deleteEntryOnlyHorseRecords }),
+          screen === "list" && h(HorseList, { horseStats, horseRecords, openHorse, setScreen, deleteHorseRecordsForRace }),
           screen === "search" && h(HorseSearch, { horseStats, openHorse }),
           screen === "horse" && h(HorsePage, { horseName: selectedHorse, memos, horseRecords, deleteMemo, setScreen, deleteHorseRecordsForHorse, deleteHorseMemosForHorse })
         ),
@@ -2061,7 +2083,7 @@ export function createKeibaApp(React, icons) {
     );
   }
 
-  function BackupScreen({ memos, raceCards, horseRecords, averageTimes, setMemos, setRaceCards, setHorseRecords, setAverageTimes, notify, setScreen }) {
+  function BackupScreen({ memos, raceCards, horseRecords, averageTimes, setMemos, setRaceCards, setHorseRecords, setAverageTimes, notify, setScreen, deleteEntryOnlyHorseRecords }) {
     const [importText, setImportText] = useState("");
     const [error, setError] = useState("");
     const backupText = JSON.stringify(buildBackup(memos, raceCards, horseRecords, averageTimes), null, 2);
@@ -2087,6 +2109,7 @@ export function createKeibaApp(React, icons) {
         if (!confirmed) return;
         setMemos(imported.memos);
         const sanitizedRaceCards = sanitizeRaceCards(imported.raceCards);
+        persistRaceCardsToStorage(sanitizedRaceCards);
         setRaceCards(sanitizedRaceCards);
         setHorseRecords(imported.horseRecords.length > 0 ? imported.horseRecords : buildHorseRecordsFromRaceCards(sanitizedRaceCards));
         setAverageTimes(mergeAverageTimes(defaultAverageTimes, imported.averageTimes));
@@ -2132,7 +2155,8 @@ export function createKeibaApp(React, icons) {
         h("h2", null, "設定"),
         h("p", null, "スマホで入力した回顧メモ、注目馬、出走表データをJSONファイルとして保存・復元できます。"),
         h("button", { type: "button", className: "secondary full-button", onClick: () => setScreen("diagnostic") }, "データ診断"),
-        h("button", { type: "button", className: "secondary full-button", onClick: restoreRaceCards }, "馬別成績から出走表を復元")
+        h("button", { type: "button", className: "secondary full-button", onClick: restoreRaceCards }, "馬別成績から出走表を復元"),
+        h("button", { type: "button", className: "danger-button full-button", onClick: deleteEntryOnlyHorseRecords }, "出走表登録で誤って作られた成績を削除")
       ),
       h("div", { className: "backup-panel" },
         h("h2", null, "バックアップ書き出し"),
@@ -2378,7 +2402,7 @@ export function createKeibaApp(React, icons) {
     );
   }
 
-  function HorseList({ horseStats, horseRecords, openHorse, setScreen, deleteHorseRecordsForHorse, deleteHorseRecordsForRace }) {
+  function HorseList({ horseStats, horseRecords, openHorse, setScreen, deleteHorseRecordsForRace }) {
     const raceGroups = groupHorseRecordsByRace(horseRecords);
     return h("section", { className: "screen" },
       h("div", { className: "backup-panel" },
@@ -2401,7 +2425,6 @@ export function createKeibaApp(React, icons) {
           key: horse.horseName,
           horse,
           onOpen: () => openHorse(horse.horseName),
-          onDeleteRecords: () => deleteHorseRecordsForHorse(horse.horseName),
         })))
     );
   }
