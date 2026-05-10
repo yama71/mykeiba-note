@@ -189,12 +189,116 @@ button {
   grid-column: 1 / -1;
 }
 
+.home-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin-bottom: 22px;
+}
+
+.home-action {
+  min-height: 72px;
+  display: grid;
+  grid-template-columns: 34px 1fr;
+  gap: 10px;
+  align-items: center;
+  padding: 12px;
+  border: 1px solid #ded6c8;
+  border-radius: 8px;
+  color: #24221d;
+  background: #fffdf8;
+  text-align: left;
+}
+
+.home-action:last-child:nth-child(odd) {
+  grid-column: 1 / -1;
+}
+
+.home-action-icon {
+  width: 34px;
+  height: 34px;
+  display: grid;
+  place-items: center;
+  border-radius: 8px;
+  color: #1f6a5d;
+  background: #e5f0ec;
+}
+
+.home-action strong,
+.home-action small {
+  display: block;
+}
+
+.home-action strong {
+  font-size: 14px;
+  line-height: 1.25;
+}
+
+.home-action small {
+  margin-top: 3px;
+  color: #6b6254;
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 1.35;
+}
+
 .section-title {
   display: flex;
   align-items: center;
   gap: 8px;
   margin: 0 0 12px;
   font-size: 17px;
+}
+
+.compact-race-list {
+  display: grid;
+  gap: 8px;
+}
+
+.compact-race-card {
+  width: 100%;
+  min-height: 62px;
+  display: grid;
+  grid-template-columns: 1fr 24px;
+  gap: 8px;
+  align-items: center;
+  padding: 10px 12px;
+  border: 1px solid #ded6c8;
+  border-radius: 8px;
+  color: #24221d;
+  background: #fffdf8;
+  text-align: left;
+}
+
+.compact-race-main {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.compact-race-main strong {
+  font-size: 15px;
+  line-height: 1.25;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.compact-race-main span {
+  color: #6b6254;
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1.25;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.race-chevron {
+  color: #8a8172;
+  font-size: 26px;
+  line-height: 1;
+  text-align: right;
 }
 
 .card-stack {
@@ -1067,6 +1171,81 @@ textarea:focus {
   grid-row: span 2;
   color: #1f6a5d;
   font-size: 18px;
+}
+
+.race-detail-screen {
+  display: grid;
+  gap: 14px;
+}
+
+.race-detail-hero,
+.race-detail-panel {
+  padding: 14px;
+  border: 1px solid #ded6c8;
+  border-radius: 8px;
+  background: #fffdf8;
+  box-shadow: 0 7px 18px rgba(45, 40, 31, 0.06);
+}
+
+.race-detail-hero p,
+.race-detail-panel p {
+  margin: 0;
+  color: #6b6254;
+  font-size: 13px;
+  font-weight: 800;
+  line-height: 1.45;
+}
+
+.race-detail-hero h2 {
+  margin: 4px 0 10px;
+  font-size: 22px;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+
+.race-detail-line {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+
+.race-detail-line span {
+  border-radius: 999px;
+  padding: 6px 9px;
+  color: #4e493f;
+  background: #f2eee5;
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.race-detail-actions {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 8px;
+}
+
+.race-detail-actions button {
+  min-height: 48px;
+}
+
+.race-detail-panel {
+  display: grid;
+  gap: 10px;
+}
+
+.race-detail-panel h3 {
+  margin: 0;
+  font-size: 16px;
+}
+
+.race-detail-panel > strong {
+  color: #1f6a5d;
+  font-size: 24px;
+  line-height: 1;
+}
+
+.compact-detail-runners .race-runner-card {
+  box-shadow: none;
 }
 
 .error-text {

@@ -51,6 +51,7 @@ const emptyRaceInfo = {
   track: "東京",
   raceNumber: "",
   raceName: "",
+  raceTime: "",
   raceClass: "未勝利",
   surface: "芝",
   distance: "",
@@ -711,6 +712,11 @@ export function createKeibaApp(React, icons) {
       setScreen("result");
     }
 
+    function openRaceDetail(raceId) {
+      setSelectedRaceId(raceId);
+      setScreen("race");
+    }
+
     function openHorse(horseName) {
       setSelectedHorse(horseName.trim());
       setScreen("horse");
@@ -719,10 +725,11 @@ export function createKeibaApp(React, icons) {
     return h("div", { className: "app-shell" },
       h(Header, { screen, setScreen }),
       h("main", null,
-        screen === "home" && h(Home, { memos, horseStats, raceCards, setScreen, openHorse, openResultImport }),
+        screen === "home" && h(Home, { raceCards, setScreen, openRaceDetail }),
         screen === "add" && h(AddMemo, { onSave: addMemo, onCancel: () => setScreen("home") }),
         screen === "import" && h(RaceImport, { onSave: addRaceCard }),
         screen === "result" && h(ResultImport, { raceCards, selectedRaceId, averageTimes, onSave: saveRaceResult, openHorse }),
+        screen === "race" && h(RaceDetail, { raceCards, selectedRaceId, averageTimes, openHorse, openResultImport, setScreen }),
         screen === "average" && h(AverageTimesScreen, { averageTimes }),
         screen === "backup" && h(BackupScreen, { memos, raceCards, horseRecords, averageTimes, setMemos, setRaceCards, setHorseRecords, setAverageTimes, notify, setScreen }),
         screen === "list" && h(HorseList, { horseStats, openHorse, setScreen }),
@@ -740,9 +747,10 @@ export function createKeibaApp(React, icons) {
       add: "回顧メモ追加",
       import: "出走表インポート",
       result: "結果インポート",
+      race: "レース詳細",
       average: "平均タイム",
       backup: "設定",
-      list: "注目馬リスト",
+      list: "馬別成績一覧",
       search: "馬名検索",
       horse: "メモ履歴",
     };
@@ -754,42 +762,34 @@ export function createKeibaApp(React, icons) {
     );
   }
 
-  function Home({ memos, horseStats, raceCards, setScreen, openHorse, openResultImport }) {
-    const [raceSort, setRaceSort] = useState("created");
-    const latest = memos.slice(0, 3);
-    const aRank = memos.filter((memo) => memo.attention === "A").length;
-    const scoredRaceCards = raceCards
-      .map((race) => ({ ...race, scoreInfo: scoreRace(race, memos) }))
-      .sort((a, b) => raceSort === "score" ? b.scoreInfo.score - a.scoreInfo.score : 0);
+  function Home({ raceCards, setScreen, openRaceDetail }) {
+    const sortedRaceCards = [...raceCards].sort((a, b) =>
+      String(a.raceInfo?.raceDate || "").localeCompare(String(b.raceInfo?.raceDate || ""))
+      || Number(a.raceInfo?.raceNumber || 0) - Number(b.raceInfo?.raceNumber || 0)
+    );
 
     return h("section", { className: "screen home" },
-      h("div", { className: "summary-grid" },
-        h(Metric, { label: "メモ数", value: memos.length }),
-        h(Metric, { label: "注目馬", value: horseStats.length }),
-        h(Metric, { label: "出走表", value: raceCards.length })
+      h("div", { className: "home-actions" },
+        h(HomeAction, { title: "レース結果インポート", text: "登録済みレースに結果を貼り付け", icon: h(ClipboardList, { size: 20 }), onClick: () => setScreen("result") }),
+        h(HomeAction, { title: "馬名検索", text: "メモと成績から馬を探す", icon: h(Search, { size: 20 }), onClick: () => setScreen("search") }),
+        h(HomeAction, { title: "馬別成績一覧", text: "馬ごとの履歴を見る", icon: h(ListChecks, { size: 20 }), onClick: () => setScreen("list") }),
+        h(HomeAction, { title: "回顧メモ追加", text: "気づいた馬をメモする", icon: h(Plus, { size: 20 }), onClick: () => setScreen("add") }),
+        h(HomeAction, { title: "今週のレース", text: "登録済みレース一覧へ", icon: h(Trophy, { size: 20 }), onClick: () => document.getElementById("weekly-races")?.scrollIntoView({ behavior: "smooth" }) }),
+        h(HomeAction, { title: "出走表インポート", text: "今週のレースを登録する", icon: h(ClipboardList, { size: 20 }), onClick: () => setScreen("import") }),
+        h(HomeAction, { title: "バックアップ / 復元", text: "JSONで保存・読み込み", icon: h(ClipboardList, { size: 20 }), onClick: () => setScreen("backup") }),
+        h(HomeAction, { title: "平均タイム管理", text: "条件別の平均時計を見る", icon: h(Clock, { size: 20 }), onClick: () => setScreen("average") })
       ),
-      h("div", { className: "action-grid" },
-        h("button", { className: "primary-action", onClick: () => setScreen("add") }, h(Plus, { size: 20 }), " 回顧メモを追加"),
-        h("button", { className: "primary-action alt", onClick: () => setScreen("import") }, h(ClipboardList, { size: 20 }), " 出走表をインポート")
-      ),
-      h("div", { className: "quick-actions" },
-        h("button", { onClick: () => setScreen("list") }, h(ListChecks, { size: 18 }), " 注目馬を見る"),
-        h("button", { onClick: () => setScreen("search") }, h(Search, { size: 18 }), " 馬名で探す"),
-        h("button", { onClick: () => setScreen("average") }, h(Clock, { size: 18 }), " 平均タイム"),
-        h("button", { onClick: () => setScreen("backup") }, h(ClipboardList, { size: 18 }), " 設定")
-      ),
-      h(SectionTitle, { icon: h(ClipboardList, { size: 18 }), title: "今週のレース一覧" }),
-      raceCards.length > 0 && h("div", { className: "sort-control", "aria-label": "レース並び替え" },
-        h("button", { className: raceSort === "created" ? "active" : "", type: "button", onClick: () => setRaceSort("created") }, "登録順"),
-        h("button", { className: raceSort === "score" ? "active" : "", type: "button", onClick: () => setRaceSort("score") }, "スコア順")
-      ),
+      h("div", { id: "weekly-races" }, h(SectionTitle, { icon: h(ClipboardList, { size: 18 }), title: "今週のレース一覧" })),
       raceCards.length === 0
         ? h(EmptyState, { title: "登録済みの出走表はありません", text: "コピーした出走表を貼り付けて、まずは1レース登録できます。" })
-        : h("div", { className: "card-stack race-list" }, scoredRaceCards.map((race) => h(RaceCard, { key: race.id, race, memos, openHorse, openResultImport }))),
-      h(SectionTitle, { icon: h(Clock, { size: 18 }), title: "最近のメモ" }),
-      latest.length === 0
-        ? h(EmptyState, { title: "まだメモがありません", text: "まずは気になった馬を1頭だけ保存してみましょう。" })
-        : h("div", { className: "card-stack" }, latest.map((memo) => h(MemoCard, { key: memo.id, memo, onOpen: () => openHorse(memo.horseName) })))
+        : h("div", { className: "compact-race-list" }, sortedRaceCards.map((race) => h(RaceListItem, { key: race.id, race, onOpen: () => openRaceDetail(race.id) })))
+    );
+  }
+
+  function HomeAction({ title, text, icon, onClick }) {
+    return h("button", { type: "button", className: "home-action", onClick },
+      h("span", { className: "home-action-icon" }, icon),
+      h("span", null, h("strong", null, title), h("small", null, text))
     );
   }
 
@@ -848,8 +848,9 @@ export function createKeibaApp(React, icons) {
       ),
       h("div", { className: "two-col" },
         h(Field, { label: "レース番号", required: true }, h("input", { inputMode: "numeric", value: raceInfo.raceNumber, onChange: (event) => updateInfo("raceNumber", event.target.value), placeholder: "11" })),
-        h(Field, { label: "レース名" }, h("input", { value: raceInfo.raceName, onChange: (event) => updateInfo("raceName", event.target.value), placeholder: "例：○○ステークス" }))
+        h(Field, { label: "発走時刻" }, h("input", { value: raceInfo.raceTime, onChange: (event) => updateInfo("raceTime", event.target.value), placeholder: "15:40" }))
       ),
+      h(Field, { label: "レース名" }, h("input", { value: raceInfo.raceName, onChange: (event) => updateInfo("raceName", event.target.value), placeholder: "例：○○ステークス" })),
       h("div", { className: "three-col" },
         h(Field, { label: "芝/ダート" }, h("select", { value: raceInfo.surface, onChange: (event) => updateInfo("surface", event.target.value) }, surfaceOptions.map((surface) => h("option", { key: surface }, surface)))),
         h(Field, { label: "距離" }, h("input", { inputMode: "numeric", value: raceInfo.distance, onChange: (event) => updateInfo("distance", event.target.value), placeholder: "1600" })),
@@ -1050,6 +1051,68 @@ export function createKeibaApp(React, icons) {
         h("b", null, item.averageTime)
       ))),
       filtered.length > 160 && h("p", { className: "lookup-note" }, `表示は先頭160件です。検索すると絞り込めます。`)
+    );
+  }
+
+  function RaceListItem({ race, onOpen }) {
+    const info = race.raceInfo || {};
+    return h("button", { type: "button", className: "compact-race-card", onClick },
+      h("span", { className: "compact-race-main" },
+        h("strong", null, `${info.raceNumber || "-"}R ${info.raceName || "レース名未入力"}`),
+        h("span", null, [
+          info.raceTime,
+          `${info.surface || ""}${info.distance || "-"}m`,
+          `${race.entries?.length || 0}頭`,
+          info.raceClass,
+        ].filter(Boolean).join("　"))
+      ),
+      h("span", { className: "race-chevron", "aria-hidden": true }, "›")
+    );
+  }
+
+  function RaceDetail({ raceCards, selectedRaceId, averageTimes, openHorse, openResultImport, setScreen }) {
+    const race = raceCards.find((item) => item.id === selectedRaceId) || raceCards[0];
+    if (!race) {
+      return h("section", { className: "screen" }, h(EmptyState, { title: "レースが見つかりません", text: "ホームからレースを選んでください。" }));
+    }
+
+    const info = race.raceInfo || {};
+    const average = findAverageTime(averageTimes, info);
+    return h("section", { className: "screen race-detail-screen" },
+      h("article", { className: "race-detail-hero" },
+        h("p", null, `${info.raceDate || "-"} ${info.track || "-"}${info.raceNumber || "-"}R`),
+        h("h2", null, info.raceName || "レース名未入力"),
+        h("div", { className: "race-detail-line" }, [
+          info.raceTime,
+          info.raceClass,
+          `${info.surface || ""}${info.distance || "-"}m`,
+          info.courseType,
+          `${race.entries?.length || 0}頭`,
+          info.going,
+        ].filter(Boolean).map((item) => h("span", { key: item }, item)))
+      ),
+      h("div", { className: "race-detail-actions" },
+        h("button", { type: "button", className: "primary", onClick: () => openResultImport(race.id) }, "このレースの結果を登録"),
+        h("button", { type: "button", className: "secondary", onClick: () => setScreen("add") }, "このレースの回顧メモを書く"),
+        race.entries?.length > 0 && h("button", { type: "button", className: "secondary", onClick: () => document.getElementById("race-runners")?.scrollIntoView({ behavior: "smooth" }) }, "出走馬を見る"),
+        h("button", { type: "button", className: "secondary", onClick: () => setScreen("home") }, "戻る")
+      ),
+      h("section", { id: "race-runners", className: "race-detail-panel" },
+        h("h3", null, "平均タイム"),
+        h("strong", null, average ? average.averageTime : "平均タイム未登録"),
+        average && h("p", null, `${average.racecourse} ${average.surface}${average.distance}${average.courseType ? ` ${average.courseType}` : ""} / ${average.raceClass} / ${average.going}`)
+      ),
+      h("section", { className: "race-detail-panel" },
+        h("h3", null, "出走馬"),
+        race.entries?.length
+          ? h("div", { className: "race-runner-stack compact-detail-runners" }, race.entries.map((entry) => h(RaceRunnerCard, {
+            key: entry.id,
+            entry,
+            latestMemo: null,
+            onOpen: () => openHorse(entry.horseName || ""),
+          })))
+          : h("p", null, "出走馬データはまだありません。")
+      )
     );
   }
 
