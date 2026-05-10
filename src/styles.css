@@ -767,6 +767,30 @@ textarea:focus {
 .full-button {
   width: 100%;
   min-height: 50px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+}
+
+.file-input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.file-button {
+  padding: 0 14px;
+}
+
+.backup-note {
+  padding: 10px 12px;
+  border-radius: 8px;
+  color: #8b5d19 !important;
+  background: #fff6e8;
+  font-weight: 800;
 }
 
 .error-text {

@@ -394,7 +394,7 @@ export function createKeibaApp(React, icons) {
       add: "回顧メモ追加",
       import: "出走表インポート",
       result: "結果インポート",
-      backup: "バックアップ",
+      backup: "設定",
       list: "注目馬リスト",
       search: "馬名検索",
       horse: "メモ履歴",
@@ -428,7 +428,7 @@ export function createKeibaApp(React, icons) {
       h("div", { className: "quick-actions" },
         h("button", { onClick: () => setScreen("list") }, h(ListChecks, { size: 18 }), " 注目馬を見る"),
         h("button", { onClick: () => setScreen("search") }, h(Search, { size: 18 }), " 馬名で探す"),
-        h("button", { onClick: () => setScreen("backup") }, h(ClipboardList, { size: 18 }), " バックアップ")
+        h("button", { onClick: () => setScreen("backup") }, h(ClipboardList, { size: 18 }), " 設定")
       ),
       h(SectionTitle, { icon: h(ClipboardList, { size: 18 }), title: "今週のレース一覧" }),
       raceCards.length > 0 && h("div", { className: "sort-control", "aria-label": "レース並び替え" },
@@ -623,6 +623,7 @@ export function createKeibaApp(React, icons) {
     const [importText, setImportText] = useState("");
     const [error, setError] = useState("");
     const backupText = JSON.stringify(buildBackup(memos, raceCards), null, 2);
+    const fileInputId = "backup-file-input";
 
     function exportBackup() {
       const blob = new Blob([backupText], { type: "application/json" });
@@ -637,10 +638,11 @@ export function createKeibaApp(React, icons) {
       notify("バックアップを書き出しました");
     }
 
-    function importBackup(event) {
-      event.preventDefault();
+    function restoreBackupText(text) {
       try {
-        const imported = parseBackup(importText);
+        const imported = parseBackup(text);
+        const confirmed = window.confirm("現在のデータが上書きされる可能性があります。読み込みますか？");
+        if (!confirmed) return;
         setMemos(imported.memos);
         setRaceCards(imported.raceCards);
         setImportText("");
@@ -652,11 +654,31 @@ export function createKeibaApp(React, icons) {
       }
     }
 
+    function importBackup(event) {
+      event.preventDefault();
+      restoreBackupText(importText);
+    }
+
+    function importBackupFile(event) {
+      const file = event.target.files?.[0];
+      if (!file) return;
+
+      const reader = new FileReader();
+      reader.onload = () => restoreBackupText(String(reader.result || ""));
+      reader.onerror = () => setError("ファイルを読み込めませんでした。もう一度選び直してください。");
+      reader.readAsText(file);
+      event.target.value = "";
+    }
+
     return h("section", { className: "screen backup-screen" },
       h("div", { className: "backup-panel" },
-        h("h2", null, "JSONバックアップ"),
-        h("p", null, "メモと出走表をまとめて保存できます。スマホの機種変更前や、念のため残したい時に使います。"),
-        h("button", { type: "button", className: "primary full-button", onClick: exportBackup }, "JSONを書き出す"),
+        h("h2", null, "設定"),
+        h("p", null, "スマホで入力した回顧メモ、注目馬、出走表データをJSONファイルとして保存・復元できます。")
+      ),
+      h("div", { className: "backup-panel" },
+        h("h2", null, "バックアップ書き出し"),
+        h("p", null, "今のデータをJSONファイルとして保存します。機種変更前や、念のため残したい時に使います。"),
+        h("button", { type: "button", className: "primary full-button", onClick: exportBackup }, "バックアップ書き出し"),
         h(Field, { label: "現在のバックアップJSON" }, h("textarea", {
           value: backupText,
           readOnly: true,
@@ -664,15 +686,25 @@ export function createKeibaApp(React, icons) {
         }))
       ),
       h("form", { className: "backup-panel", onSubmit: importBackup },
-        h("h2", null, "JSONを読み込む"),
-        h(Field, { label: "バックアップJSON" }, h("textarea", {
+        h("h2", null, "バックアップ読み込み"),
+        h("p", null, "書き出したJSONファイルを選ぶと復元できます。読み込み前に確認画面が出ます。"),
+        h("input", {
+          id: fileInputId,
+          className: "file-input",
+          type: "file",
+          accept: "application/json,.json",
+          onChange: importBackupFile,
+        }),
+        h("label", { className: "secondary full-button file-button", htmlFor: fileInputId }, "バックアップ読み込み"),
+        h("p", { className: "backup-note" }, "現在のデータが上書きされる可能性があります。"),
+        h(Field, { label: "JSONを貼り付けて読み込む場合" }, h("textarea", {
           value: importText,
           onChange: (event) => setImportText(event.target.value),
           placeholder: "ここにバックアップJSONを貼り付け",
           rows: 10,
         })),
         error && h("p", { className: "error-text" }, error),
-        h("button", { className: "primary full-button", disabled: !importText.trim() }, "読み込む")
+        h("button", { className: "primary full-button", disabled: !importText.trim() }, "貼り付けたJSONを読み込む")
       )
     );
   }
