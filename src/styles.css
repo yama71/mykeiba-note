@@ -1136,6 +1136,58 @@ textarea:focus {
   line-height: 1.55;
 }
 
+.preview-panel {
+  display: grid;
+  gap: 10px;
+  padding: 14px;
+  border: 1px solid #cfd8d0;
+  border-radius: 8px;
+  background: #f7fbf7;
+}
+
+.preview-panel h3,
+.preview-panel p {
+  margin: 0;
+}
+
+.preview-panel h3 {
+  font-size: 15px;
+}
+
+.preview-panel p {
+  color: #4e493f;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.preview-panel pre {
+  overflow-x: auto;
+  max-height: 220px;
+  margin: 0;
+  padding: 12px;
+  border-radius: 8px;
+  color: #2b312c;
+  background: #ffffff;
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+}
+
+.preview-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.preview-stats span {
+  padding: 6px 10px;
+  border-radius: 999px;
+  color: #1f6a5d;
+  background: #e6f4ef;
+  font-size: 12px;
+  font-weight: 900;
+}
+
 .error-panel {
   display: grid;
   gap: 12px;

@@ -600,7 +600,7 @@ function judgeTrackTrend(winningTime, averageWinningTime) {
 }
 
 function buildRaceResult(rows, averageWinningTime) {
-  const safeRows = Array.isArray(rows) ? rows : [];
+  const safeRows = safeArray(rows).map(sanitizeResultRow);
   const sortedRows = [...safeRows].sort((a, b) => Number(a.finish || 999) - Number(b.finish || 999));
   const winningTime = sortedRows[0]?.time || "";
   return {
@@ -629,11 +629,11 @@ function sanitizeRaceInfo(info = {}) {
     raceNumber: String(info.raceNumber || ""),
     raceName: String(info.raceName || ""),
     raceTime: String(info.raceTime || info.startTime || ""),
-    raceClass: normalizeRaceClass(info.raceClass || emptyRaceInfo.raceClass),
-    surface: info.surface || emptyRaceInfo.surface,
+    raceClass: info.raceClass ? normalizeRaceClass(info.raceClass) : "",
+    surface: info.surface || "",
     distance: String(info.distance || ""),
     courseType: info.courseType || "",
-    going: info.going || emptyRaceInfo.going,
+    going: info.going || "",
   };
 }
 
@@ -672,13 +672,14 @@ function sanitizeResultRow(row = {}) {
 }
 
 function sanitizeRaceCard(race = {}) {
-  const result = race.result ? {
-    ...race.result,
-    rows: safeArray(race.result.rows).map(sanitizeResultRow),
-    averageWinningTime: race.result.averageWinningTime || "",
-    winningTime: race.result.winningTime || "",
-    paceBias: race.result.paceBias || "判定材料不足",
-    trackTrend: race.result.trackTrend || "平均勝ち時計を入力すると補助判定できます",
+  const rawResult = race.result || (race.results ? { rows: race.results } : null);
+  const result = rawResult ? {
+    ...rawResult,
+    rows: safeArray(rawResult.rows || rawResult.results).map(sanitizeResultRow),
+    averageWinningTime: rawResult.averageWinningTime || "",
+    winningTime: rawResult.winningTime || "",
+    paceBias: rawResult.paceBias || "判定材料不足",
+    trackTrend: rawResult.trackTrend || "平均勝ち時計を入力すると補助判定できます",
   } : null;
   return {
     ...race,
@@ -696,7 +697,7 @@ function sanitizeRaceCards(raceCards) {
 
 function isReadableRaceCard(race) {
   const info = race?.raceInfo || {};
-  return Boolean(race?.id && info.raceName && info.raceNumber && info.track && info.surface && info.distance && info.raceClass && Array.isArray(race.entries));
+  return Boolean(race?.id && info.raceDate && info.raceNumber && info.track && Array.isArray(race.entries));
 }
 
 function sanitizeReadableRaceCards(raceCards) {
@@ -717,12 +718,21 @@ function validateRaceCard(raceCard) {
   if (!race.raceInfo.raceDate) errors.push("開催日を入力してください。");
   if (!race.raceInfo.track) errors.push("競馬場を入力してください。");
   if (!race.raceInfo.raceNumber) errors.push("レース番号を入力してください。");
-  if (!race.raceInfo.raceName) errors.push("レース名を入力してください。");
-  if (!race.raceInfo.surface) errors.push("芝/ダートを選んでください。");
-  if (!race.raceInfo.distance) errors.push("距離を入力してください。");
-  if (race.entries.length === 0) errors.push("出走馬が1頭もありません。");
-  if (race.entries.some((entry) => !entry.horseName || !entry.horseNumber)) errors.push("馬名または馬番が空の出走馬があります。");
+  const validEntries = race.entries.filter((entry) => normalizeHorseName(entry.horseName));
+  if (validEntries.length === 0) errors.push("馬名が1件も取得できていません。");
+  race.entries = validEntries;
   return { race, errors };
+}
+
+function validateRaceResultInput(race, rows) {
+  const info = sanitizeRaceInfo(race?.raceInfo || {});
+  const validRows = safeArray(rows).map(sanitizeResultRow).filter((row) => normalizeHorseName(row.horseName) && row.finish);
+  const errors = [];
+  if (!info.raceDate) errors.push("レース日が未入力です。");
+  if (!info.track) errors.push("競馬場が未入力です。");
+  if (!info.raceNumber) errors.push("レース番号が未入力です。");
+  if (validRows.length === 0) errors.push("馬名と着順が入っている結果が1件もありません。");
+  return { validRows, errors };
 }
 
 function isolateLatestProblemData() {
@@ -1087,7 +1097,10 @@ export function createKeibaApp(React, icons) {
     const [pasteText, setPasteText] = useState("");
     const [entries, setEntries] = useState([]);
     const [warning, setWarning] = useState("");
-    const canSave = raceInfo.raceDate && raceInfo.track && raceInfo.raceNumber && entries.length > 0;
+    const [showPreview, setShowPreview] = useState(false);
+    const safeEntries = safeArray(entries).map(sanitizeRaceEntry);
+    const validEntryCount = safeEntries.filter((entry) => normalizeHorseName(entry.horseName)).length;
+    const unparsedEntryCount = Math.max(0, safeEntries.length - validEntryCount);
 
     function updateInfo(field, value) {
       setRaceInfo((current) => ({ ...current, [field]: value }));
@@ -1104,28 +1117,35 @@ export function createKeibaApp(React, icons) {
     function analyze() {
       const parsedEntries = parseRaceEntries(pasteText);
       setEntries(parsedEntries);
-      setWarning(parsedEntries.some((entry) => !entry.parsed) ? "一部の行を解析できませんでした。空欄を確認してから登録してください。" : "");
+      const validCount = parsedEntries.filter((entry) => normalizeHorseName(entry.horseName)).length;
+      const skippedCount = Math.max(0, parsedEntries.length - validCount);
+      setWarning(parsedEntries.length === 0
+        ? "馬名が1件も取得できていません。手入力行を追加して修正できます。"
+        : `${validCount}件登録できます。${skippedCount}件は未解析です。空欄は必要なら修正してください。`);
     }
 
     function submit(event) {
       event.preventDefault();
-      if (!canSave) return;
       const preparedRaceCard = {
         raceInfo: {
           ...raceInfo,
-          raceClass: normalizeRaceClass(raceInfo.raceClass),
-          distance: raceInfo.distance.trim(),
-          raceName: raceInfo.raceName.trim(),
+          raceClass: raceInfo.raceClass ? normalizeRaceClass(raceInfo.raceClass) : "",
+          distance: String(raceInfo.distance || "").trim(),
+          raceName: String(raceInfo.raceName || "").trim(),
+          surface: raceInfo.surface || "",
+          going: raceInfo.going || "",
         },
-        entries: entries.map(({ id, frameNumber, horseNumber, horseName, sexAge, popularity, jockey, carriedWeight }) => ({
+        entries: safeEntries.map(({ id, frameNumber, horseNumber, horseName, sexAge, popularity, jockey, carriedWeight, raw, parsed }) => ({
           id,
-          frameNumber: frameNumber.trim(),
-          horseNumber: horseNumber.trim(),
-          horseName: horseName.trim(),
-          sexAge: sexAge.trim(),
-          popularity: popularity.trim(),
-          jockey: jockey.trim(),
-          carriedWeight: carriedWeight.trim(),
+          frameNumber: String(frameNumber || "").trim(),
+          horseNumber: String(horseNumber || "").trim(),
+          horseName: String(horseName || "").trim(),
+          sexAge: String(sexAge || "").trim(),
+          popularity: String(popularity || "").trim(),
+          jockey: String(jockey || "").trim(),
+          carriedWeight: String(carriedWeight || "").trim(),
+          raw: raw || "",
+          parsed: Boolean(parsed),
         })),
       };
       const validation = validateRaceCard(preparedRaceCard);
@@ -1138,6 +1158,7 @@ export function createKeibaApp(React, icons) {
       setPasteText("");
       setEntries([]);
       setWarning("");
+      setShowPreview(false);
     }
 
     return h("form", { className: "screen form-screen", onSubmit: submit },
@@ -1171,12 +1192,22 @@ export function createKeibaApp(React, icons) {
       ),
       h(SectionTitle, { icon: h(ClipboardList, { size: 18 }), title: `抽出結果 ${entries.length}頭` }),
       warning && h("div", { className: "warning-panel" }, warning),
+      h("div", { className: "form-actions inline-actions" },
+        h("button", { type: "button", className: "secondary", onClick: () => setShowPreview((current) => !current) }, "登録予定データを確認")
+      ),
+      showPreview && h(RegistrationPreview, {
+        title: "出走表の登録予定",
+        raceInfo,
+        rows: safeEntries,
+        validCount: validEntryCount,
+        unparsedCount: unparsedEntryCount,
+      }),
       entries.length === 0
         ? h(EmptyState, { title: "まだ解析結果がありません", text: "出走表テキストを貼り付けて解析してください。" })
         : h("div", { className: "entry-stack" }, entries.map((entry, index) => h(EntryEditor, { key: entry.id, entry, index, updateEntry }))),
       h("div", { className: "form-actions" },
         h("button", { type: "button", className: "secondary", onClick: () => setEntries([]) }, "結果クリア"),
-        h("button", { className: "primary", disabled: !canSave }, "登録")
+        h("button", { className: "primary" }, "登録")
       )
     );
   }
@@ -1215,8 +1246,12 @@ export function createKeibaApp(React, icons) {
       going: currentRace?.raceInfo?.going || "良",
     }));
     const [rows, setRows] = useState(safeArray(currentRace?.result?.rows).map(sanitizeResultRow));
+    const [warning, setWarning] = useState("");
+    const [showPreview, setShowPreview] = useState(false);
+    const safeRows = safeArray(rows).map(sanitizeResultRow);
+    const validResultCount = safeRows.filter((row) => normalizeHorseName(row.horseName) && row.finish).length;
+    const unparsedResultCount = Math.max(0, safeRows.length - validResultCount);
     const resultPreview = buildRaceResult(rows, averageWinningTime);
-    const canSave = Boolean(raceId) && rows.length > 0;
     const matchedAverageTime = findAverageTime(averageTimes, raceInfoDraft);
 
     useEffect(() => {
@@ -1231,6 +1266,8 @@ export function createKeibaApp(React, icons) {
       });
       setAverageWinningTime(currentRace.result?.averageWinningTime || "");
       setRows(safeArray(currentRace.result?.rows).map(sanitizeResultRow));
+      setWarning("");
+      setShowPreview(false);
     }, [raceId]);
 
     useEffect(() => {
@@ -1248,7 +1285,13 @@ export function createKeibaApp(React, icons) {
     }
 
     function analyze() {
-      setRows(parseResultRows(pasteText, currentRace));
+      const parsedRows = parseResultRows(pasteText, currentRace);
+      const validCount = parsedRows.filter((row) => normalizeHorseName(row.horseName) && row.finish).length;
+      const skippedCount = Math.max(0, parsedRows.length - validCount);
+      setRows(parsedRows);
+      setWarning(parsedRows.length === 0
+        ? "馬名と着順が入っている結果が1件もありません。手入力行を追加して修正できます。"
+        : `${validCount}件登録できます。${skippedCount}件は未解析です。空欄は必要なら修正してください。`);
     }
 
     function addManualRow() {
@@ -1257,27 +1300,44 @@ export function createKeibaApp(React, icons) {
 
     function submit(event) {
       event.preventDefault();
-      if (!canSave) return;
-      onSave(raceId, buildRaceResult(safeArray(rows).map((row) => ({
-        id: row.id,
-        finish: row.finish.trim(),
-        frameNumber: (row.frameNumber || "").trim(),
-        horseNumber: (row.horseNumber || "").trim(),
-        horseName: row.horseName.trim(),
-        sexAge: (row.sexAge || "").trim(),
-        popularity: (row.popularity || "").trim(),
-        jockey: (row.jockey || "").trim(),
-        carriedWeight: (row.carriedWeight || "").trim(),
-        time: row.time.trim(),
-        margin: row.margin.trim(),
-        last3f: row.last3f.trim(),
-        corner3: (row.corner3 || "").trim(),
-        corner4: (row.corner4 || "").trim(),
-      })), averageWinningTime.trim()), {
+      if (!raceId || !currentRace) {
+        setWarning("対象レースが選ばれていません。先に出走表を登録するか、対象レースを選んでください。");
+        return;
+      }
+      const mergedRaceInfo = sanitizeRaceInfo({
+        ...currentRace.raceInfo,
         ...raceInfoDraft,
-        raceClass: normalizeRaceClass(raceInfoDraft.raceClass),
-        distance: String(raceInfoDraft.distance).trim(),
+        raceDate: currentRace.raceInfo?.raceDate || raceInfoDraft.raceDate || "",
+        raceNumber: currentRace.raceInfo?.raceNumber || raceInfoDraft.raceNumber || "",
+        raceName: currentRace.raceInfo?.raceName || raceInfoDraft.raceName || "",
       });
+      const validation = validateRaceResultInput({ raceInfo: mergedRaceInfo }, safeRows);
+      if (validation.errors.length > 0) {
+        setWarning(validation.errors.join(" "));
+        return;
+      }
+      onSave(raceId, buildRaceResult(validation.validRows.map((row) => ({
+        id: row.id,
+        finish: String(row.finish || "").trim(),
+        frameNumber: String(row.frameNumber || "").trim(),
+        horseNumber: String(row.horseNumber || "").trim(),
+        horseName: String(row.horseName || "").trim(),
+        sexAge: String(row.sexAge || "").trim(),
+        popularity: String(row.popularity || "").trim(),
+        jockey: String(row.jockey || "").trim(),
+        carriedWeight: String(row.carriedWeight || "").trim(),
+        time: String(row.time || "").trim(),
+        margin: String(row.margin || "").trim(),
+        last3f: String(row.last3f || "").trim(),
+        corner3: String(row.corner3 || "").trim(),
+        corner4: String(row.corner4 || "").trim(),
+      })), String(averageWinningTime || "").trim()), {
+        ...mergedRaceInfo,
+        raceClass: mergedRaceInfo.raceClass ? normalizeRaceClass(mergedRaceInfo.raceClass) : "",
+        distance: String(mergedRaceInfo.distance || "").trim(),
+      });
+      setWarning("");
+      setShowPreview(false);
     }
 
     return h("form", { className: "screen form-screen", onSubmit: submit },
@@ -1315,12 +1375,26 @@ export function createKeibaApp(React, icons) {
           ),
           h(ResultSummary, { result: resultPreview }),
           h(SectionTitle, { icon: h(ClipboardList, { size: 18 }), title: `抽出結果 ${rows.length}頭` }),
+          warning && h("div", { className: "warning-panel" }, warning),
+          h("div", { className: "form-actions inline-actions" },
+            h("button", { type: "button", className: "secondary", onClick: () => setShowPreview((current) => !current) }, "登録予定データを確認")
+          ),
+          showPreview && h(RegistrationPreview, {
+            title: "結果の登録予定",
+            raceInfo: {
+              ...currentRace?.raceInfo,
+              ...raceInfoDraft,
+            },
+            rows: safeRows,
+            validCount: validResultCount,
+            unparsedCount: unparsedResultCount,
+          }),
           rows.length === 0
             ? h(EmptyState, { title: "まだ解析結果がありません", text: "結果テキストを貼り付けて解析してください。" })
             : h("div", { className: "entry-stack" }, rows.map((row, index) => h(ResultRowEditor, { key: row.id, row, index, updateRow, openHorse }))),
           h("div", { className: "form-actions" },
             h("button", { type: "button", className: "secondary", onClick: () => setRows([]) }, "結果クリア"),
-            h("button", { className: "primary", disabled: !canSave }, "保存")
+            h("button", { className: "primary" }, "保存")
           )
         )
     );
@@ -1546,6 +1620,35 @@ export function createKeibaApp(React, icons) {
       h("div", null, h("span", null, "脚質バイアス"), h("strong", null, result.paceBias)),
       h("div", null, h("span", null, "馬場傾向"), h("strong", null, result.trackTrend)),
       h("p", null, "断定ではなく、レース回顧のための補助判断です。")
+    );
+  }
+
+  function RegistrationPreview({ title, raceInfo, rows, validCount, unparsedCount }) {
+    const info = sanitizeRaceInfo(raceInfo);
+    const summary = {
+      raceInfo: {
+        raceDate: info.raceDate || "",
+        racecourse: info.track || "",
+        raceNumber: info.raceNumber || "",
+        raceName: info.raceName || "",
+        raceClass: info.raceClass || "",
+        surface: info.surface || "",
+        distance: info.distance || "",
+        going: info.going || "",
+      },
+      registerableHorses: validCount,
+      unparsedRows: unparsedCount,
+      sampleRows: safeArray(rows).slice(0, 3),
+    };
+
+    return h("section", { className: "preview-panel" },
+      h("h3", null, title),
+      h("div", { className: "preview-stats" },
+        h("span", null, `登録予定: ${validCount}件`),
+        h("span", null, `未解析: ${unparsedCount}件`)
+      ),
+      h("p", null, `${info.track || "競馬場未入力"} ${info.raceNumber || "レース番号未入力"}R ${info.raceName || "レース名未入力"}`),
+      h("pre", null, JSON.stringify(summary, null, 2))
     );
   }
 
