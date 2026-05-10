@@ -1124,6 +1124,41 @@ textarea:focus {
   font-weight: 800;
 }
 
+.warning-panel,
+.error-panel {
+  padding: 14px;
+  border: 1px solid #d5a15d;
+  border-radius: 8px;
+  color: #6f4515;
+  background: #fff9ee;
+  font-size: 14px;
+  font-weight: 800;
+  line-height: 1.55;
+}
+
+.error-panel {
+  display: grid;
+  gap: 12px;
+  color: #7d2f28;
+  border-color: #d9a29a;
+  background: #fff4f1;
+}
+
+.error-panel h2,
+.error-panel p {
+  margin: 0;
+}
+
+.error-panel h2 {
+  font-size: 18px;
+  line-height: 1.4;
+}
+
+.error-panel p {
+  color: #6b6254;
+  font-weight: 700;
+}
+
 .lookup-note {
   margin: -4px 0 4px;
   padding: 10px 12px;
