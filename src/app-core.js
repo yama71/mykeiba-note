@@ -266,63 +266,140 @@ function scoreRace(race, memos) {
   };
 }
 
-function parseResultRows(text) {
-  const lines = text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
-  const rows = lines
-    .filter((line) => !/^(着順|順位|馬名|タイム|通過|上がり|人気)/.test(line))
-    .map(parseResultLine);
-  return rows.length > 0 ? rows : [makeResultRow("")];
+function parseResultRows(text, raceCard) {
+  const lines = text.split(/\r?\n/).map(normalizeRaceTextLine).filter(Boolean);
+  const corner3Map = parseCornerPositions(extractCornerLine(lines, "3コーナー"));
+  const corner4Map = parseCornerPositions(extractCornerLine(lines, "4コーナー"));
+  const rows = [];
+
+  lines.forEach((line, index) => {
+    const head = line.match(/^(\d{1,2})\s+([1-8])\s+(\d{1,2})(?:\s+(.+))?$/);
+    if (!head) return;
+
+    const horseLine = head[4]?.includes("番人気")
+      ? head[4]
+      : lines.slice(index + 1, index + 4).find((nextLine) => /番人気/.test(nextLine)) || "";
+    const sexAgeLine = lines.slice(index + 1, index + 5).find((nextLine) => extractSexAge(nextLine));
+    const jockeyLine = lines.slice(index + 1, index + 6).find((nextLine) => extractJockeyWeight(nextLine));
+    const timeLine = lines.slice(index + 1, index + 7).find((nextLine) => extractResultTime(nextLine));
+    const horseInfo = parseResultHorseLine(horseLine);
+    const jockeyWeight = jockeyLine ? extractJockeyWeight(jockeyLine) : null;
+    const timeInfo = timeLine ? extractResultTime(timeLine) : null;
+    const linkedEntry = findRaceEntryForResult(raceCard, head[3], horseInfo.horseName);
+
+    rows.push({
+      id: crypto.randomUUID(),
+      finish: head[1],
+      frameNumber: head[2] || linkedEntry?.frameNumber || "",
+      horseNumber: head[3] || linkedEntry?.horseNumber || "",
+      horseName: horseInfo.horseName || linkedEntry?.horseName || "",
+      sexAge: extractSexAge(sexAgeLine || "") || linkedEntry?.sexAge || "",
+      popularity: horseInfo.popularity || linkedEntry?.popularity || "",
+      jockey: jockeyWeight?.jockey || linkedEntry?.jockey || "",
+      carriedWeight: jockeyWeight?.carriedWeight || linkedEntry?.carriedWeight || "",
+      time: timeInfo?.time || "",
+      margin: timeInfo?.margin || "",
+      last3f: timeInfo?.last3f || "",
+      corner3: corner3Map[head[3]] ? String(corner3Map[head[3]]) : "",
+      corner4: corner4Map[head[3]] ? String(corner4Map[head[3]]) : "",
+      raw: [line, horseLine, sexAgeLine, jockeyLine, timeLine].filter(Boolean).join(" / "),
+      parsed: Boolean(horseInfo.horseName && sexAgeLine && jockeyWeight && timeInfo),
+    });
+  });
+
+  return rows.length > 0 ? rows : [makeResultRow(text.trim())];
 }
 
-function parseResultLine(line) {
-  const normalized = line.replace(/\u3000/g, " ").replace(/[|｜]/g, " ");
-  const tokens = normalized.split(/\s+/).filter(Boolean);
-  const finish = tokens[0] || "";
-  const timeIndex = tokens.findIndex((token) => /^\d{1,2}:\d{2}\.\d$/.test(token) || /^\d{2,3}\.\d$/.test(token));
-  const positionIndex = tokens.findIndex((token) => /^\d{1,2}(?:-\d{1,2})+$/.test(token));
-  const last3fIndex = tokens.findLastIndex((token) => /^\d{2}\.\d$/.test(token));
+function parseResultHorseLine(line) {
+  const cleaned = line.replace(/ブリンカー/g, " ").replace(/\s+/g, " ").trim();
+  const matched = cleaned.match(/^(.+?)(\d{1,2})番人気$/);
+  if (!matched) return { horseName: cleaned, popularity: "" };
+  return {
+    horseName: matched[1].trim(),
+    popularity: matched[2],
+  };
+}
 
-  if (/^\d{1,2}$/.test(finish) && timeIndex > 1) {
-    const horseName = tokens.slice(1, timeIndex).join(" ");
-    const margin = positionIndex > timeIndex ? tokens.slice(timeIndex + 1, positionIndex).join(" ") : "";
-    const position = positionIndex >= 0 ? tokens[positionIndex] : "";
-    const last3f = last3fIndex > positionIndex ? tokens[last3fIndex] : "";
+function extractResultTime(line) {
+  const matched = line.match(/(\d{1,2}:\d{2}\.\d|\d{2,3}\.\d)(?:\s*\(([^)]+)\))?\s*\/\s*(\d{2}\.\d)/);
+  if (!matched) return null;
+  return {
+    time: matched[1],
+    margin: matched[2]?.trim() || "",
+    last3f: matched[3],
+  };
+}
 
-    return {
-      id: crypto.randomUUID(),
-      finish,
-      horseName,
-      time: tokens[timeIndex],
-      margin,
-      position,
-      corner4: deriveCorner4(position),
-      last3f,
-      raw: line,
-      parsed: true,
-    };
+function extractCornerLine(lines, label) {
+  const index = lines.findIndex((line) => line === label || line.startsWith(label));
+  if (index < 0) return "";
+  const sameLine = lines[index].replace(label, "").trim();
+  if (sameLine) return sameLine;
+  return lines[index + 1] || "";
+}
+
+function parseCornerPositions(value) {
+  const positions = {};
+  const text = normalizeRaceTextLine(value).replace(/[＊*]/g, "");
+  let currentPosition = 1;
+  let index = 0;
+
+  while (index < text.length) {
+    const char = text[index];
+    if (char === "(" || char === "（") {
+      const end = text.indexOf(char === "(" ? ")" : "）", index + 1);
+      const groupText = end >= 0 ? text.slice(index + 1, end) : text.slice(index + 1);
+      const numbers = groupText.match(/\d{1,2}/g) || [];
+      numbers.forEach((number) => {
+        positions[number] = currentPosition;
+      });
+      currentPosition += numbers.length;
+      index = end >= 0 ? end + 1 : text.length;
+      continue;
+    }
+
+    if (/\d/.test(char)) {
+      const matched = text.slice(index).match(/^\d{1,2}/);
+      const number = matched[0];
+      positions[number] = currentPosition;
+      currentPosition += 1;
+      index += number.length;
+      continue;
+    }
+
+    index += 1;
   }
 
-  return makeResultRow(line);
+  return positions;
+}
+
+function findRaceEntryForResult(raceCard, horseNumber, horseName) {
+  if (!raceCard?.entries) return null;
+  const normalizedName = horseName.trim();
+  return raceCard.entries.find((entry) => entry.horseNumber === horseNumber)
+    || raceCard.entries.find((entry) => entry.horseName.trim() === normalizedName)
+    || null;
 }
 
 function makeResultRow(raw) {
   return {
     id: crypto.randomUUID(),
     finish: "",
+    frameNumber: "",
+    horseNumber: "",
     horseName: "",
+    sexAge: "",
+    popularity: "",
+    jockey: "",
+    carriedWeight: "",
     time: "",
     margin: "",
-    position: "",
+    corner3: "",
     corner4: "",
     last3f: "",
     raw,
     parsed: false,
   };
-}
-
-function deriveCorner4(position) {
-  const parts = position.split("-").map((part) => part.trim()).filter(Boolean);
-  return parts[parts.length - 1] || "";
 }
 
 function toSeconds(value) {
@@ -640,13 +717,12 @@ export function createKeibaApp(React, icons) {
       setRows((current) => current.map((row) => row.id === id ? {
         ...row,
         [field]: value,
-        corner4: field === "position" ? deriveCorner4(value) : row.corner4,
         parsed: true,
       } : row));
     }
 
     function analyze() {
-      setRows(parseResultRows(pasteText));
+      setRows(parseResultRows(pasteText, currentRace));
     }
 
     function addManualRow() {
@@ -657,14 +733,20 @@ export function createKeibaApp(React, icons) {
       event.preventDefault();
       if (!canSave) return;
       onSave(raceId, buildRaceResult(rows.map((row) => ({
-        ...row,
+        id: row.id,
         finish: row.finish.trim(),
+        frameNumber: (row.frameNumber || "").trim(),
+        horseNumber: (row.horseNumber || "").trim(),
         horseName: row.horseName.trim(),
+        sexAge: (row.sexAge || "").trim(),
+        popularity: (row.popularity || "").trim(),
+        jockey: (row.jockey || "").trim(),
+        carriedWeight: (row.carriedWeight || "").trim(),
         time: row.time.trim(),
         margin: row.margin.trim(),
-        position: row.position.trim(),
-        corner4: row.corner4.trim(),
         last3f: row.last3f.trim(),
+        corner3: (row.corner3 || "").trim(),
+        corner4: (row.corner4 || "").trim(),
       })), averageWinningTime.trim()));
     }
 
@@ -686,7 +768,7 @@ export function createKeibaApp(React, icons) {
           h(Field, { label: "レース結果テキスト" }, h("textarea", {
             value: pasteText,
             onChange: (event) => setPasteText(event.target.value),
-            placeholder: "例：1 テストホース 1:33.2 - 3-3-2 34.1",
+            placeholder: "JRAや競馬サイトのスマホ向けレース結果をそのまま貼り付け",
             rows: 8,
           })),
           h("div", { className: "form-actions inline-actions" },
@@ -812,12 +894,18 @@ export function createKeibaApp(React, icons) {
       ),
       h("div", { className: "result-grid" },
         h(Field, { label: "着順" }, h("input", { inputMode: "numeric", value: row.finish, onChange: (event) => updateRow(row.id, "finish", event.target.value) })),
+        h(Field, { label: "枠" }, h("input", { inputMode: "numeric", value: row.frameNumber || "", onChange: (event) => updateRow(row.id, "frameNumber", event.target.value) })),
+        h(Field, { label: "馬番" }, h("input", { inputMode: "numeric", value: row.horseNumber || "", onChange: (event) => updateRow(row.id, "horseNumber", event.target.value) })),
         h(Field, { label: "馬名" }, h("input", { value: row.horseName, onChange: (event) => updateRow(row.id, "horseName", event.target.value) })),
+        h(Field, { label: "性齢" }, h("input", { value: row.sexAge || "", onChange: (event) => updateRow(row.id, "sexAge", event.target.value), placeholder: "牡3" })),
+        h(Field, { label: "人気" }, h("input", { inputMode: "numeric", value: row.popularity || "", onChange: (event) => updateRow(row.id, "popularity", event.target.value) })),
+        h(Field, { label: "騎手" }, h("input", { value: row.jockey || "", onChange: (event) => updateRow(row.id, "jockey", event.target.value) })),
+        h(Field, { label: "斤量" }, h("input", { inputMode: "decimal", value: row.carriedWeight || "", onChange: (event) => updateRow(row.id, "carriedWeight", event.target.value) })),
         h(Field, { label: "走破タイム" }, h("input", { value: row.time, onChange: (event) => updateRow(row.id, "time", event.target.value), placeholder: "1:33.2" })),
         h(Field, { label: "着差" }, h("input", { value: row.margin, onChange: (event) => updateRow(row.id, "margin", event.target.value), placeholder: "-" })),
-        h(Field, { label: "通過順" }, h("input", { value: row.position, onChange: (event) => updateRow(row.id, "position", event.target.value), placeholder: "3-3-2" })),
-        h(Field, { label: "4角位置" }, h("input", { inputMode: "numeric", value: row.corner4, onChange: (event) => updateRow(row.id, "corner4", event.target.value) })),
-        h(Field, { label: "上がり3F" }, h("input", { inputMode: "decimal", value: row.last3f, onChange: (event) => updateRow(row.id, "last3f", event.target.value), placeholder: "34.1" }))
+        h(Field, { label: "上がり3F" }, h("input", { inputMode: "decimal", value: row.last3f, onChange: (event) => updateRow(row.id, "last3f", event.target.value), placeholder: "34.1" })),
+        h(Field, { label: "3角" }, h("input", { inputMode: "numeric", value: row.corner3 || "", onChange: (event) => updateRow(row.id, "corner3", event.target.value) })),
+        h(Field, { label: "4角" }, h("input", { inputMode: "numeric", value: row.corner4 || "", onChange: (event) => updateRow(row.id, "corner4", event.target.value) }))
       )
     );
   }
