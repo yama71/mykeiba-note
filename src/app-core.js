@@ -744,14 +744,37 @@ function makeId(prefix) {
   return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }
 
+function normalizeRaceNumber(value) {
+  const text = String(value ?? "").trim().replace(/[０-９]/g, (char) => String.fromCharCode(char.charCodeAt(0) - 0xfee0)).replace(/[Ｒｒ]/g, "R");
+  const matched = text.match(/\d{1,2}/);
+  return matched ? `${Number(matched[0])}R` : "";
+}
+
+function raceNumberLabel(value) {
+  return normalizeRaceNumber(value) || String(value || "").trim() || "-";
+}
+
+function normalizeRaceCourse(value) {
+  return String(value || "").trim() || "未設定";
+}
+
+function buildStableRaceId(info = {}) {
+  const date = String(info.date || info.raceDate || "").trim() || "日付未設定";
+  const racecourse = normalizeRaceCourse(info.racecourse || info.track || info.raceCourse);
+  const raceNumber = normalizeRaceNumber(info.raceNumber || info.raceNo || info.race || info.raceNum || info.race_number || info.raceIndex || info.R || info["レース番号"]) || "未設定";
+  return `${date}_${racecourse}_${raceNumber}`;
+}
+
 function sanitizeRaceInfo(info = {}) {
+  const raceNumber = normalizeRaceNumber(info.raceNumber || info.raceNo || info.race || info.raceNum || info.race_number || info.raceIndex || info.R || info["レース番号"]);
+  const racecourse = normalizeRaceCourse(info.racecourse || info.track || info.raceCourse || info["競馬場"]);
   return {
     ...emptyRaceInfo,
     ...info,
     raceDate: String(info.date || info.raceDate || ""),
-    track: info.racecourse || info.track || info.raceCourse || "",
-    raceNumber: String(info.raceNumber || ""),
-    raceName: String(info.raceName || ""),
+    track: racecourse,
+    raceNumber,
+    raceName: String(info.raceName || info.name || info["レース名"] || ""),
     raceTime: String(info.startTime || info.raceTime || ""),
     raceClass: info.raceClass ? normalizeRaceClass(info.raceClass) : "",
     surface: info.surface || "",
@@ -812,7 +835,15 @@ function sanitizeRaceCard(race = {}) {
   const infoSource = { ...(race.raceInfo || {}), ...race };
   const raceInfo = sanitizeRaceInfo(infoSource);
   const entries = safeArray(race.entries).map(sanitizeRaceEntry);
-  const id = race.id || race.raceId || makeId("race");
+  if (!raceInfo.raceName) raceInfo.raceName = "名称未設定";
+  if (!raceInfo.raceNumber) raceInfo.raceNumber = "未設定";
+  if (!raceInfo.track) raceInfo.track = "未設定";
+  const stableRaceId = buildStableRaceId({
+    date: raceInfo.raceDate,
+    racecourse: raceInfo.track,
+    raceNumber: raceInfo.raceNumber,
+  });
+  const id = race.raceId || race.id || stableRaceId;
   const rawResult = race.result || (race.results ? { rows: race.results } : null);
   const result = rawResult ? {
     ...rawResult,
@@ -825,7 +856,7 @@ function sanitizeRaceCard(race = {}) {
   return {
     ...race,
     id,
-    raceId: race.raceId || race.id || id,
+    raceId: race.raceId || stableRaceId || id,
     date: raceInfo.raceDate || "",
     racecourse: raceInfo.track || "",
     raceNumber: raceInfo.raceNumber || "",
@@ -845,9 +876,14 @@ function sanitizeRaceCard(race = {}) {
 
 function toStorageRaceCard(race = {}) {
   const safeRace = sanitizeRaceCard(race);
+  const raceId = buildStableRaceId({
+    date: safeRace.raceInfo.raceDate,
+    racecourse: safeRace.raceInfo.track,
+    raceNumber: safeRace.raceInfo.raceNumber,
+  });
   const storageRace = {
-    id: safeRace.id,
-    raceId: safeRace.raceId || safeRace.id,
+    id: raceId,
+    raceId,
     date: safeRace.raceInfo.raceDate || "",
     racecourse: safeRace.raceInfo.track || "",
     raceNumber: safeRace.raceInfo.raceNumber || "",
@@ -909,6 +945,14 @@ function persistRaceCardsToStorage(raceCards) {
   return storageCards;
 }
 
+function upsertRaceCardInStorage(raceCard) {
+  const storageRace = toStorageRaceCard(raceCard);
+  const current = loadJson(RACE_STORAGE_KEY).map(toStorageRaceCard);
+  const next = [storageRace, ...current.filter((race) => race.raceId !== storageRace.raceId && race.id !== storageRace.id)];
+  persistRaceCardsToStorage(next);
+  return { storageRace, next };
+}
+
 function verifyStoredRaceCard(raceId, expectedEntryCount) {
   const stored = loadJson(RACE_STORAGE_KEY);
   const found = stored.find((race) => race?.id === raceId || race?.raceId === raceId);
@@ -966,12 +1010,11 @@ function validateRaceCard(raceCard) {
 
 function validateRaceResultInput(race, rows) {
   const info = sanitizeRaceInfo(race?.raceInfo || {});
-  const validRows = safeArray(rows).map(sanitizeResultRow).filter((row) => normalizeHorseName(row.horseName) && row.finish);
+  const validRows = safeArray(rows).map(sanitizeResultRow).filter((row) => normalizeHorseName(row.horseName));
   const errors = [];
-  if (!info.raceDate) errors.push("レース日が未入力です。");
   if (!info.track) errors.push("競馬場が未入力です。");
   if (!info.raceNumber) errors.push("レース番号が未入力です。");
-  if (validRows.length === 0) errors.push("馬名と着順が入っている結果が1件もありません。");
+  if (validRows.length === 0) errors.push("馬名が入っている結果が1件もありません。");
   return { validRows, errors };
 }
 
@@ -1242,13 +1285,10 @@ export function createKeibaApp(React, icons) {
     function addRaceCard(raceCard) {
       try {
         const now = new Date().toISOString();
-        const id = crypto.randomUUID();
         const beforeCount = loadJson(RACE_STORAGE_KEY).length;
-        const nextRaceCard = sanitizeRaceCard(toStorageRaceCard({ ...raceCard, id, raceId: id, createdAt: now, updatedAt: now }));
+        const nextRaceCard = sanitizeRaceCard(toStorageRaceCard({ ...raceCard, createdAt: now, updatedAt: now }));
         const entryCount = safeArray(nextRaceCard.entries).length;
-        const currentCards = sanitizeRaceCards(raceCards);
-        const nextCards = [nextRaceCard, ...currentCards.filter((race) => race.id !== nextRaceCard.id)];
-        persistRaceCardsToStorage(nextCards);
+        const { storageRace, next } = upsertRaceCardInStorage(nextRaceCard);
         const verification = verifyStoredRaceCard(nextRaceCard.id, entryCount);
         if (!verification.ok) {
           return {
@@ -1257,15 +1297,16 @@ export function createKeibaApp(React, icons) {
             debug: { beforeCount, afterCount: verification.count, raceId: nextRaceCard.id, entryCount, verification },
           };
         }
+        const nextCards = sanitizeRaceCards(next);
         setRaceCards(nextCards);
-        setSelectedRaceId(nextRaceCard.id);
-        notify(`登録しました：${nextRaceCard.raceInfo.track}${nextRaceCard.raceInfo.raceNumber}R ${nextRaceCard.raceInfo.raceName} / ${entryCount}頭`);
+        setSelectedRaceId(storageRace.raceId);
+        notify(`登録しました：${nextRaceCard.raceInfo.track}${raceNumberLabel(nextRaceCard.raceInfo.raceNumber)} ${nextRaceCard.raceInfo.raceName} / ${entryCount}頭`);
         setScreen("race");
         return {
           ok: true,
-          message: `登録しました：${nextRaceCard.raceInfo.track}${nextRaceCard.raceInfo.raceNumber}R ${nextRaceCard.raceInfo.raceName} / ${entryCount}頭`,
+          message: `登録しました：${nextRaceCard.raceInfo.track}${raceNumberLabel(nextRaceCard.raceInfo.raceNumber)} ${nextRaceCard.raceInfo.raceName} / ${entryCount}頭`,
           confirmation: `保存確認OK：${RACE_STORAGE_KEY} に${verification.count}件保存 / entries ${verification.entryCount}頭`,
-          debug: { beforeCount, afterCount: verification.count, raceId: nextRaceCard.id, entryCount, verification },
+          debug: { beforeCount, afterCount: verification.count, raceId: storageRace.raceId, entryCount, verification },
         };
       } catch (error) {
         console.error("Race card save failed", error);
@@ -1278,12 +1319,16 @@ export function createKeibaApp(React, icons) {
     }
 
     function saveRaceResult(raceId, result, raceInfoPatch = {}) {
-      const targetRace = raceCards.find((race) => race.id === raceId);
+      const allRaceCards = loadRaceCardsFromStorage();
+      const targetRace = sanitizeRaceCards([...raceCards, ...allRaceCards]).find((race) => race.id === raceId || race.raceId === raceId);
       const raceForRecord = targetRace ? { ...targetRace, raceInfo: { ...targetRace.raceInfo, ...raceInfoPatch } } : null;
       if (targetRace) {
         setHorseRecords((current) => upsertHorseRecords(current, raceForRecord, result));
       }
-      setRaceCards((current) => sanitizeRaceCards(current.map((race) => race.id === raceId ? { ...race, raceInfo: { ...race.raceInfo, ...raceInfoPatch }, result } : race)));
+      const updatedRace = sanitizeRaceCard({ ...(targetRace || {}), id: raceId, raceId, raceInfo: { ...(targetRace?.raceInfo || {}), ...raceInfoPatch }, result });
+      const nextCards = [updatedRace, ...sanitizeRaceCards(allRaceCards).filter((race) => race.id !== updatedRace.id && race.raceId !== updatedRace.raceId)];
+      persistRaceCardsToStorage(nextCards);
+      setRaceCards(nextCards);
       notify("レース結果を保存しました");
       setScreen("home");
     }
@@ -1348,9 +1393,11 @@ export function createKeibaApp(React, icons) {
   }
 
   function Home({ raceCards, setScreen, openRaceDetail, safeHomeMode }) {
-    const sortedRaceCards = safeArray(raceCards).map(sanitizeRaceCard).sort((a, b) =>
+    const storedRaceCards = loadRaceCardsFromStorage();
+    const displayRaceCards = storedRaceCards.length > 0 ? storedRaceCards : safeArray(raceCards);
+    const sortedRaceCards = safeArray(displayRaceCards).map(sanitizeRaceCard).sort((a, b) =>
       String(a.raceInfo?.raceDate || "").localeCompare(String(b.raceInfo?.raceDate || ""))
-      || Number(a.raceInfo?.raceNumber || 0) - Number(b.raceInfo?.raceNumber || 0)
+      || Number(normalizeRaceNumber(a.raceInfo?.raceNumber).match(/\d+/)?.[0] || 0) - Number(normalizeRaceNumber(b.raceInfo?.raceNumber).match(/\d+/)?.[0] || 0)
     );
 
     return h("section", { className: "screen home" },
@@ -1544,7 +1591,10 @@ export function createKeibaApp(React, icons) {
     const [pasteText, setPasteText] = useState("");
     const [averageWinningTime, setAverageWinningTime] = useState(currentRace?.result?.averageWinningTime || "");
     const [raceInfoDraft, setRaceInfoDraft] = useState(() => ({
+      raceDate: currentRace?.raceInfo?.raceDate || "",
       track: currentRace?.raceInfo?.track || "東京",
+      raceNumber: currentRace?.raceInfo?.raceNumber || "",
+      raceName: currentRace?.raceInfo?.raceName || "",
       surface: currentRace?.raceInfo?.surface || "芝",
       distance: currentRace?.raceInfo?.distance || "",
       raceClass: normalizeRaceClass(currentRace?.raceInfo?.raceClass || "未勝利"),
@@ -1555,7 +1605,7 @@ export function createKeibaApp(React, icons) {
     const [warning, setWarning] = useState("");
     const [showPreview, setShowPreview] = useState(false);
     const safeRows = safeArray(rows).map(sanitizeResultRow);
-    const validResultCount = safeRows.filter((row) => normalizeHorseName(row.horseName) && row.finish).length;
+    const validResultCount = safeRows.filter((row) => normalizeHorseName(row.horseName)).length;
     const unparsedResultCount = Math.max(0, safeRows.length - validResultCount);
     const resultPreview = buildRaceResult(rows, averageWinningTime);
     const matchedAverageTime = findAverageTime(averageTimes, raceInfoDraft);
@@ -1563,7 +1613,10 @@ export function createKeibaApp(React, icons) {
     useEffect(() => {
       if (!currentRace) return;
       setRaceInfoDraft({
+        raceDate: currentRace.raceInfo?.raceDate || "",
         track: currentRace.raceInfo?.track || "東京",
+        raceNumber: currentRace.raceInfo?.raceNumber || "",
+        raceName: currentRace.raceInfo?.raceName || "",
         surface: currentRace.raceInfo?.surface || "芝",
         distance: currentRace.raceInfo?.distance || "",
         raceClass: normalizeRaceClass(currentRace.raceInfo?.raceClass || "未勝利"),
@@ -1592,7 +1645,7 @@ export function createKeibaApp(React, icons) {
 
     function analyze() {
       const parsedRows = parseResultRows(pasteText, currentRace);
-      const validCount = parsedRows.filter((row) => normalizeHorseName(row.horseName) && row.finish).length;
+      const validCount = parsedRows.filter((row) => normalizeHorseName(row.horseName)).length;
       const skippedCount = Math.max(0, parsedRows.length - validCount);
       setRows(parsedRows);
       setWarning(parsedRows.length === 0
@@ -1613,8 +1666,8 @@ export function createKeibaApp(React, icons) {
       const mergedRaceInfo = sanitizeRaceInfo({
         ...currentRace.raceInfo,
         ...raceInfoDraft,
-        raceDate: currentRace.raceInfo?.raceDate || raceInfoDraft.raceDate || "",
-        raceNumber: currentRace.raceInfo?.raceNumber || raceInfoDraft.raceNumber || "",
+        raceDate: raceInfoDraft.raceDate || currentRace.raceInfo?.raceDate || "",
+        raceNumber: raceInfoDraft.raceNumber || currentRace.raceInfo?.raceNumber || "",
         raceName: currentRace.raceInfo?.raceName || raceInfoDraft.raceName || "",
       });
       const validation = validateRaceResultInput({ raceInfo: mergedRaceInfo }, safeRows);
@@ -1652,7 +1705,12 @@ export function createKeibaApp(React, icons) {
         : h(React.Fragment, null,
           h(Field, { label: "対象レース" }, h("select", { value: raceId, onChange: (event) => {
             setRaceId(event.target.value);
-          } }, safeRaceCards.map((race) => h("option", { key: race.id, value: race.id }, `${race.raceInfo.track}${race.raceInfo.raceNumber}R ${race.raceInfo.raceName || "レース名未入力"}`)))),
+          } }, safeRaceCards.map((race) => h("option", { key: race.id, value: race.id }, `${race.raceInfo.track}${raceNumberLabel(race.raceInfo.raceNumber)} ${race.raceInfo.raceName || "レース名未入力"}`)))),
+          h("div", { className: "three-col" },
+            h(Field, { label: "レース日" }, h("input", { type: "date", value: raceInfoDraft.raceDate || "", onChange: (event) => setRaceInfoDraft((current) => ({ ...current, raceDate: event.target.value })) })),
+            h(Field, { label: "レース番号" }, h("input", { value: raceInfoDraft.raceNumber || "", onChange: (event) => setRaceInfoDraft((current) => ({ ...current, raceNumber: event.target.value })), placeholder: "11R" })),
+            h(Field, { label: "レース名" }, h("input", { value: raceInfoDraft.raceName || "", onChange: (event) => setRaceInfoDraft((current) => ({ ...current, raceName: event.target.value })) }))
+          ),
           h("div", { className: "three-col" },
             h(Field, { label: "競馬場" }, h("select", { value: raceInfoDraft.track, onChange: (event) => setRaceInfoDraft((current) => ({ ...current, track: event.target.value })) }, tracks.map((track) => h("option", { key: track }, track)))),
             h(Field, { label: "芝/ダート" }, h("select", { value: raceInfoDraft.surface, onChange: (event) => setRaceInfoDraft((current) => ({ ...current, surface: event.target.value })) }, surfaceOptions.map((surface) => h("option", { key: surface }, surface)))),
@@ -1768,7 +1826,7 @@ export function createKeibaApp(React, icons) {
     const info = safeRace.raceInfo || {};
     return h("button", { type: "button", className: "compact-race-card", onClick },
       h("span", { className: "compact-race-main" },
-        h("strong", null, `${info.raceNumber || "-"}R ${info.raceName || "レース名未入力"}`),
+        h("strong", null, `${raceNumberLabel(info.raceNumber)} ${info.raceName || "レース名未入力"}`),
         h("span", null, [
           info.raceTime,
           `${info.surface || ""}${info.distance || "-"}m`,
@@ -1791,7 +1849,7 @@ export function createKeibaApp(React, icons) {
     const average = findAverageTime(averageTimes, info);
     return h("section", { className: "screen race-detail-screen" },
       h("article", { className: "race-detail-hero" },
-        h("p", null, `${info.raceDate || "-"} ${info.track || "-"}${info.raceNumber || "-"}R`),
+        h("p", null, `${info.raceDate || "-"} ${info.track || "-"}${raceNumberLabel(info.raceNumber)}`),
         h("h2", null, info.raceName || "レース名未入力"),
         h("div", { className: "race-detail-line" }, [
           info.raceTime,
@@ -1981,7 +2039,7 @@ export function createKeibaApp(React, icons) {
         h("span", null, `未解析: ${unparsedCount}件`),
         h("span", null, `entries配列: ${summary.entriesIsArray ? "はい" : "いいえ"}`)
       ),
-      h("p", null, `${info.track || "競馬場未入力"} ${info.raceNumber || "レース番号未入力"}R ${info.raceName || "レース名未入力"}`),
+      h("p", null, `${info.track || "競馬場未入力"} ${raceNumberLabel(info.raceNumber) || "レース番号未入力"} ${info.raceName || "レース名未入力"}`),
       h("pre", null, JSON.stringify(summary, null, 2))
     );
   }
@@ -2018,7 +2076,7 @@ export function createKeibaApp(React, icons) {
     return h("article", { className: `race-card score-${scoreInfo.label.slice(-1)}` },
       h("div", { className: "race-head" },
         h("div", null,
-          h("h3", null, `${info.track}${info.raceNumber}R ${info.raceName || "レース名未入力"}`),
+          h("h3", null, `${info.track}${raceNumberLabel(info.raceNumber)} ${info.raceName || "レース名未入力"}`),
           h("p", null, `${info.raceDate}・${info.surface}${info.distance || "-"}m・${info.going}`)
         ),
         h("strong", null, `${safeRace.entries.length}頭`)
@@ -2215,7 +2273,7 @@ export function createKeibaApp(React, icons) {
           h("span", null, "着")
         ),
         h("div", { className: "record-body" },
-          h("h3", null, `${formatDateSlash(record.raceDate)} ${record.track}${record.raceNumber}R ${record.raceName || "レース名未入力"}`),
+          h("h3", null, `${formatDateSlash(record.raceDate)} ${record.track}${raceNumberLabel(record.raceNumber)} ${record.raceName || "レース名未入力"}`),
           h("p", { className: "record-condition" }, [record.raceClass, `${record.surface || ""}${record.distance || ""}`, record.going].filter(Boolean).join(" / ")),
           h("div", { className: "record-facts" },
             h("span", null, `${record.finish || "-"}着 / ${record.fieldSize || "-"}頭 / 人気${record.popularity || "-"}`),
@@ -2256,7 +2314,7 @@ export function createKeibaApp(React, icons) {
   function HorseCard({ horse, onOpen }) {
     return h("button", { className: "horse-card", onClick: onOpen },
       h("div", { className: `rank rank-${horse.maxAttention}` }, horse.maxAttention),
-      h("div", null, h("h3", null, horse.horseName), h("p", null, `${horse.latest.raceDate}・${horse.latest.track}${horse.latest.raceNumber ? `${horse.latest.raceNumber}R` : ""}・${horse.latest.distance || "距離未入力"}`), h("div", { className: "mini-tags" }, h("span", null, `メモ ${horse.count}`), h("span", null, `成績 ${horse.recordCount || 0}`), h("span", null, `自信度 ${horse.latest.confidence}`)))
+      h("div", null, h("h3", null, horse.horseName), h("p", null, `${horse.latest.raceDate}・${horse.latest.track}${horse.latest.raceNumber ? raceNumberLabel(horse.latest.raceNumber) : ""}・${horse.latest.distance || "距離未入力"}`), h("div", { className: "mini-tags" }, h("span", null, `メモ ${horse.count}`), h("span", null, `成績 ${horse.recordCount || 0}`), h("span", null, `自信度 ${horse.latest.confidence}`)))
     );
   }
 
@@ -2265,7 +2323,7 @@ export function createKeibaApp(React, icons) {
     return h("article", { className: "memo-card" },
       h("button", { className: "card-main", onClick: onOpen },
         h("div", { className: "memo-head" },
-          h("div", null, h("h3", null, memo.horseName), h("p", null, h(CalendarDays, { size: 14 }), ` ${memo.raceDate}・${memo.track}${memo.raceNumber ? `${memo.raceNumber}R` : ""}・${memo.distance || "距離未入力"}`)),
+          h("div", null, h("h3", null, memo.horseName), h("p", null, h(CalendarDays, { size: 14 }), ` ${memo.raceDate}・${memo.track}${memo.raceNumber ? raceNumberLabel(memo.raceNumber) : ""}・${memo.distance || "距離未入力"}`)),
           h("div", { className: `rank rank-${memo.attention}` }, memo.attention)
         ),
         h("div", { className: "facts" }, h("span", null, `馬場 ${memo.going}`), h("span", null, `着順 ${memo.finish || "-"}`), h("span", null, `通過 ${memo.position || "-"}`), h("span", null, `上がり ${memo.last3f || "-"}`)),
