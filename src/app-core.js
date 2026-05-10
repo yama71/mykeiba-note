@@ -83,45 +83,128 @@ function parseBackup(text) {
 }
 
 function parseRaceEntries(text) {
-  const lines = text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
-  const rows = lines
+  const lines = text.split(/\r?\n/).map(normalizeRaceTextLine).filter(Boolean);
+  const rows = [];
+  let pendingNumbers = [];
+
+  lines.forEach((line, index) => {
+    const numbers = extractNumberOnlyLine(line);
+    if (numbers.length > 0) {
+      pendingNumbers = numbers;
+      return;
+    }
+
+    if (!isHorseInfoLine(line)) return;
+
+    const row = parseHorseInfoLine(line, pendingNumbers);
+    pendingNumbers = [];
+
+    const sexAgeLine = lines.slice(index + 1, index + 4).find((nextLine) => extractSexAge(nextLine));
+    const jockeyLine = lines.slice(index + 1, index + 5).find((nextLine) => extractJockeyWeight(nextLine));
+    const sexAge = sexAgeLine ? extractSexAge(sexAgeLine) : "";
+    const jockeyWeight = jockeyLine ? extractJockeyWeight(jockeyLine) : null;
+
+    rows.push({
+      ...row,
+      sexAge,
+      jockey: jockeyWeight?.jockey || "",
+      carriedWeight: jockeyWeight?.carriedWeight || "",
+      parsed: Boolean(row.horseNumber && row.horseName && sexAge && jockeyWeight),
+    });
+  });
+
+  if (rows.length > 0) return rows;
+
+  const legacyRows = lines
     .filter((line) => !/^(枠|枠番|馬番|印|人気|単勝|性齢|馬体重)/.test(line))
-    .map(parseRaceLine);
-  return rows.length > 0 ? rows : [makeUnparsedRow("")];
+    .map(parseLegacyRaceLine)
+    .filter(Boolean);
+  return legacyRows.length > 0 ? legacyRows : [makeUnparsedRow(text.trim())];
 }
 
-function parseRaceLine(line) {
-  const normalized = line.replace(/\u3000/g, " ").replace(/[|｜]/g, " ");
-  const tokens = normalized.split(/\s+/).filter(Boolean);
+function normalizeRaceTextLine(line) {
+  return line
+    .replace(/[０-９．]/g, (char) => String.fromCharCode(char.charCodeAt(0) - 0xfee0))
+    .replace(/\u3000/g, " ")
+    .replace(/[|｜]/g, " ")
+    .replace(/\t/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
 
-  if (tokens.length >= 5 && isFrame(tokens[0]) && isHorseNumber(tokens[1])) {
-    return {
-      id: crypto.randomUUID(),
-      frameNumber: tokens[0],
-      horseNumber: tokens[1],
-      horseName: tokens.slice(2, -2).join(" "),
-      jockey: tokens[tokens.length - 2],
-      carriedWeight: tokens[tokens.length - 1],
-      raw: line,
-      parsed: true,
-    };
-  }
+function extractNumberOnlyLine(line) {
+  const cleaned = line.replace(/ブリンカー|前4走を開く|前4走/g, "").trim();
+  if (!/^\d{1,2}(?:\s+\d{1,2})?$/.test(cleaned)) return [];
+  return cleaned.split(/\s+/).map((value) => Number(value));
+}
 
-  const matched = normalized.match(/^([1-8])\s*[-]?\s*(\d{1,2})\s+(.+?)\s+([^\s]+)\s+(\d{2}(?:\.\d)?|[0-9０-９]{2}(?:\.[0-9])?)$/);
-  if (matched) {
-    return {
-      id: crypto.randomUUID(),
-      frameNumber: matched[1],
-      horseNumber: matched[2],
-      horseName: matched[3].trim(),
-      jockey: matched[4],
-      carriedWeight: matched[5],
-      raw: line,
-      parsed: true,
-    };
-  }
+function isHorseInfoLine(line) {
+  return /\(\d{1,2}番人気\)/.test(line);
+}
 
-  return makeUnparsedRow(line);
+function parseHorseInfoLine(line, pendingNumbers) {
+  const popularity = line.match(/\((\d{1,2})番人気\)/)?.[1] || "";
+  const beforePopularity = line.split(/\(\d{1,2}番人気\)/)[0] || line;
+  const withoutNoise = beforePopularity
+    .replace(/ブリンカー/g, " ")
+    .replace(/\d+(?:\.\d+)?\s*$/, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  const sameLine = withoutNoise.match(/^(?:(\d{1,2})\s+)?(?:(\d{1,2})\s+)?(.+)$/);
+  const sameLineNumbers = [sameLine?.[1], sameLine?.[2]].filter(Boolean).map((value) => Number(value));
+  const horseName = (sameLine?.[3] || "").trim();
+  const numbers = sameLineNumbers.length > 0 ? sameLineNumbers : pendingNumbers;
+  const horseNumber = numbers.length >= 2 ? numbers[1] : numbers[0];
+  const frameNumber = numbers.length >= 2 ? numbers[0] : inferFrameNumber(horseNumber);
+
+  return {
+    id: crypto.randomUUID(),
+    frameNumber: frameNumber ? String(frameNumber) : "",
+    horseNumber: horseNumber ? String(horseNumber) : "",
+    horseName,
+    sexAge: "",
+    popularity,
+    jockey: "",
+    carriedWeight: "",
+    raw: line,
+    parsed: false,
+  };
+}
+
+function extractSexAge(line) {
+  return line.match(/[牡牝セ]\d{1,2}/)?.[0] || "";
+}
+
+function extractJockeyWeight(line) {
+  const matched = line.match(/([▲△☆◇★▽]?\s*[^()\s]+)\((\d{2}(?:\.\d)?)\)/);
+  if (!matched) return null;
+  return {
+    jockey: matched[1].replace(/^[▲△☆◇★▽]\s*/, "").trim(),
+    carriedWeight: matched[2],
+  };
+}
+
+function inferFrameNumber(horseNumber) {
+  const number = Number(horseNumber);
+  if (!Number.isFinite(number) || number < 1) return "";
+  return Math.min(8, Math.ceil(number / 2));
+}
+
+function parseLegacyRaceLine(line) {
+  const tokens = line.split(/\s+/).filter(Boolean);
+  if (tokens.length < 5 || !isFrame(tokens[0]) || !isHorseNumber(tokens[1])) return null;
+  return {
+    id: crypto.randomUUID(),
+    frameNumber: tokens[0],
+    horseNumber: tokens[1],
+    horseName: tokens.slice(2, -2).join(" "),
+    sexAge: "",
+    popularity: "",
+    jockey: tokens[tokens.length - 2].replace(/^[▲△☆◇★▽]\s*/, ""),
+    carriedWeight: tokens[tokens.length - 1].replace(/kg$/i, ""),
+    raw: line,
+    parsed: true,
+  };
 }
 
 function makeUnparsedRow(raw) {
@@ -130,6 +213,8 @@ function makeUnparsedRow(raw) {
     frameNumber: "",
     horseNumber: "",
     horseName: "",
+    sexAge: "",
+    popularity: "",
     jockey: "",
     carriedWeight: "",
     raw,
@@ -472,15 +557,15 @@ export function createKeibaApp(React, icons) {
       if (!canSave) return;
       onSave({
         raceInfo: { ...raceInfo, distance: raceInfo.distance.trim(), raceName: raceInfo.raceName.trim() },
-        entries: entries.map(({ id, frameNumber, horseNumber, horseName, jockey, carriedWeight, raw, parsed }) => ({
+        entries: entries.map(({ id, frameNumber, horseNumber, horseName, sexAge, popularity, jockey, carriedWeight }) => ({
           id,
           frameNumber: frameNumber.trim(),
           horseNumber: horseNumber.trim(),
           horseName: horseName.trim(),
+          sexAge: sexAge.trim(),
+          popularity: popularity.trim(),
           jockey: jockey.trim(),
           carriedWeight: carriedWeight.trim(),
-          raw,
-          parsed,
         })),
       });
       setRaceInfo(emptyRaceInfo);
@@ -505,7 +590,7 @@ export function createKeibaApp(React, icons) {
       h(Field, { label: "出走表テキスト" }, h("textarea", {
         value: pasteText,
         onChange: (event) => setPasteText(event.target.value),
-        placeholder: "例：1 1 サンプルホース 横山武史 57.0",
+        placeholder: "JRAや競馬サイトのスマホ向け出馬表をそのまま貼り付け",
         rows: 8,
       })),
       h("div", { className: "form-actions inline-actions" },
@@ -530,9 +615,11 @@ export function createKeibaApp(React, icons) {
         entry.raw && h("span", null, entry.raw)
       ),
       h("div", { className: "entry-grid" },
-        h(Field, { label: "枠番" }, h("input", { inputMode: "numeric", value: entry.frameNumber, onChange: (event) => updateEntry(entry.id, "frameNumber", event.target.value) })),
+        h(Field, { label: "枠" }, h("input", { inputMode: "numeric", value: entry.frameNumber, onChange: (event) => updateEntry(entry.id, "frameNumber", event.target.value) })),
         h(Field, { label: "馬番" }, h("input", { inputMode: "numeric", value: entry.horseNumber, onChange: (event) => updateEntry(entry.id, "horseNumber", event.target.value) })),
         h(Field, { label: "馬名" }, h("input", { value: entry.horseName, onChange: (event) => updateEntry(entry.id, "horseName", event.target.value) })),
+        h(Field, { label: "性齢" }, h("input", { value: entry.sexAge || "", onChange: (event) => updateEntry(entry.id, "sexAge", event.target.value), placeholder: "牡3" })),
+        h(Field, { label: "人気" }, h("input", { inputMode: "numeric", value: entry.popularity || "", onChange: (event) => updateEntry(entry.id, "popularity", event.target.value) })),
         h(Field, { label: "騎手" }, h("input", { value: entry.jockey, onChange: (event) => updateEntry(entry.id, "jockey", event.target.value) })),
         h(Field, { label: "斤量" }, h("input", { inputMode: "decimal", value: entry.carriedWeight, onChange: (event) => updateEntry(entry.id, "carriedWeight", event.target.value) }))
       )
@@ -785,7 +872,12 @@ export function createKeibaApp(React, icons) {
             h("h4", null, entry.horseName || "馬名未入力"),
             hasMemo && h("span", { className: `rank mini-rank rank-${attention}` }, attention)
           ),
-          h("p", null, `${entry.jockey || "騎手未入力"}・${entry.carriedWeight || "-"}kg`)
+          h("p", null, [
+            entry.sexAge,
+            entry.popularity ? `人気${entry.popularity}` : "",
+            entry.jockey || "騎手未入力",
+            `${entry.carriedWeight || "-"}kg`,
+          ].filter(Boolean).join("・"))
         )
       ),
       h("div", { className: `memo-status ${hasMemo ? "has-memo" : ""}` }, hasMemo ? "過去メモあり" : "過去メモなし"),

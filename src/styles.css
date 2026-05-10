@@ -839,13 +839,16 @@ textarea:focus {
 
 .entry-grid {
   display: grid;
-  grid-template-columns: 0.7fr 0.7fr 1.6fr;
+  grid-template-columns: 0.65fr 0.75fr 1.6fr 0.8fr 0.75fr 1.2fr 0.8fr;
   gap: 10px;
 }
 
-.entry-grid .field:nth-child(4),
-.entry-grid .field:nth-child(5) {
-  grid-column: span 1;
+.entry-grid .field:nth-child(3) {
+  grid-column: span 2;
+}
+
+.entry-grid .field:nth-child(6) {
+  grid-column: span 2;
 }
 
 .result-grid {
