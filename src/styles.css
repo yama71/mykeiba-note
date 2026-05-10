@@ -1221,6 +1221,85 @@ textarea:focus {
   line-height: 1.45;
 }
 
+.delete-panel,
+.danger-zone {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid #e1b6ad;
+  border-radius: 8px;
+  background: #fff8f5;
+}
+
+.delete-panel h3,
+.delete-panel p {
+  margin: 0;
+}
+
+.delete-panel h3 {
+  color: #7d2f28;
+  font-size: 15px;
+}
+
+.race-delete-row {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 8px;
+  padding: 10px;
+  border-radius: 8px;
+  background: #fff;
+}
+
+.race-delete-row strong {
+  display: block;
+  color: #3c3328;
+  font-size: 14px;
+}
+
+.race-delete-row p {
+  color: #6b6254;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.danger-button {
+  min-height: 42px;
+  border: 1px solid #d39a91;
+  color: #7d2f28;
+  background: #fff3f0;
+  font-weight: 900;
+}
+
+.danger-button.ghost {
+  color: #6b6254;
+  border-color: #d7cec0;
+  background: #fffdf8;
+}
+
+.compact-danger {
+  width: 100%;
+  min-height: 38px;
+  margin-top: 8px;
+  font-size: 13px;
+}
+
+.horse-card-actionable {
+  display: grid;
+  gap: 0;
+}
+
+.horse-card-main {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 12px;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  color: inherit;
+  background: transparent;
+  text-align: left;
+}
+
 .error-panel {
   display: grid;
   gap: 12px;
