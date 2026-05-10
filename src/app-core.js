@@ -7,6 +7,7 @@ const AVERAGE_TIMES_STORAGE_KEY = "keiba-average-times-v1";
 const BROKEN_WEEKLY_RACES_KEY = "keiba-broken-weekly-races-v1";
 const BROKEN_RACE_ENTRIES_KEY = "keiba-broken-race-entries-v1";
 const BROKEN_RACE_RESULTS_KEY = "keiba-broken-race-results-v1";
+const FORCE_HOME_STORAGE_KEY = "keiba-force-home-v1";
 const BACKUP_VERSION = 1;
 const STORAGE_ALIASES = {
   horseNotes: MEMO_STORAGE_KEY,
@@ -153,6 +154,7 @@ function getStorageDiagnostics() {
     keys.push(localStorage.key(index));
   }
   const watched = Object.entries(STORAGE_ALIASES).map(([label, key]) => {
+    const isolated = label.startsWith("broken") || key.includes("broken");
     const exists = localStorage.getItem(key) != null;
     const raw = localStorage.getItem(key);
     let parseable = false;
@@ -166,7 +168,7 @@ function getStorageDiagnostics() {
         type = "文字列";
       }
     }
-    return { label, key, exists, parseable, type };
+    return { label, key, exists, parseable, type, isolated };
   });
   return { keys, watched };
 }
@@ -210,6 +212,16 @@ function runRecoveryAction(action) {
     action();
   } catch (error) {
     console.error("MyKeiba recovery action failed", error);
+  } finally {
+    window.location.reload();
+  }
+}
+
+function returnToHomeSafely() {
+  try {
+    localStorage.setItem(FORCE_HOME_STORAGE_KEY, "1");
+  } catch (error) {
+    console.error("MyKeiba force home failed", error);
   } finally {
     window.location.reload();
   }
@@ -1079,14 +1091,16 @@ export function createKeibaApp(React, icons) {
                 h("button", { type: "button", className: "secondary full-button", onClick: () => runRecoveryAction(resetWeeklyRaceDataOnly) }, "今週のレースデータだけリセット"),
                 h("button", { type: "button", className: "secondary full-button", onClick: () => runRecoveryAction(resetRaceEntriesOnly) }, "出走表データだけリセット"),
                 h("button", { type: "button", className: "secondary full-button", onClick: () => runRecoveryAction(resetRaceResultsOnly) }, "結果登録データだけリセット"),
-                h("button", { type: "button", className: "secondary full-button", onClick: () => runRecoveryAction(repairStorageData) }, "通常画面に戻る")
+                h("button", { type: "button", className: "secondary full-button", onClick: returnToHomeSafely }, "通常画面に戻る")
               ),
               h("div", { className: "storage-debug" },
                 h("h3", null, "保存データの状態"),
                 h("p", null, `localStorageキー: ${diagnostics.keys.length ? diagnostics.keys.join(" / ") : "なし"}`),
                 h("div", { className: "storage-debug-list" }, diagnostics.watched.map((item) => h("div", { key: item.label, className: "storage-debug-row" },
                   h("span", null, item.label),
-                  h("strong", null, `${item.exists ? "あり" : "なし"} / ${item.parseable ? "JSON OK" : "JSON不可"} / ${item.type}`)
+                  h("strong", null, item.isolated && item.exists
+                    ? `隔離済みデータ：あり。通常動作には影響しません / ${item.parseable ? "JSON OK" : "JSON不可"} / ${item.type}`
+                    : `${item.exists ? "あり" : "なし"} / ${item.parseable ? "JSON OK" : "JSON不可"} / ${item.type}`)
                 )))
               )
             )
@@ -1099,8 +1113,9 @@ export function createKeibaApp(React, icons) {
 
   function App() {
     const [screen, setScreen] = useState("home");
+    const [safeHomeMode] = useState(() => localStorage.getItem(FORCE_HOME_STORAGE_KEY) === "1");
     const [memos, setMemos] = useState(() => loadJson(MEMO_STORAGE_KEY));
-    const [raceCards, setRaceCards] = useState(() => sanitizeReadableRaceCards(loadJson(RACE_STORAGE_KEY)));
+    const [raceCards, setRaceCards] = useState(() => safeHomeMode ? [] : sanitizeReadableRaceCards(loadJson(RACE_STORAGE_KEY)));
     const [horseRecords, setHorseRecords] = useState(() => {
       const savedRecords = loadJson(HORSE_RECORDS_STORAGE_KEY);
       return savedRecords.length > 0 ? savedRecords : buildHorseRecordsFromRaceCards(sanitizeRaceCards(loadJson(RACE_STORAGE_KEY)));
@@ -1111,7 +1126,13 @@ export function createKeibaApp(React, icons) {
     const [toast, setToast] = useState("");
 
     useEffect(() => saveJson(MEMO_STORAGE_KEY, memos), [memos]);
-    useEffect(() => saveJson(RACE_STORAGE_KEY, safeArray(raceCards).map(toStorageRaceCard)), [raceCards]);
+    useEffect(() => {
+      if (safeHomeMode) {
+        localStorage.removeItem(FORCE_HOME_STORAGE_KEY);
+        return;
+      }
+      saveJson(RACE_STORAGE_KEY, safeArray(raceCards).map(toStorageRaceCard));
+    }, [raceCards, safeHomeMode]);
     useEffect(() => saveJson(HORSE_RECORDS_STORAGE_KEY, horseRecords), [horseRecords]);
     useEffect(() => saveJson(AVERAGE_TIMES_STORAGE_KEY, averageTimes), [averageTimes]);
 
@@ -1201,7 +1222,7 @@ export function createKeibaApp(React, icons) {
       h("div", { className: "app-shell" },
         h(Header, { screen, setScreen }),
         h("main", null,
-          screen === "home" && h(Home, { raceCards, setScreen, openRaceDetail }),
+          screen === "home" && h(Home, { raceCards, setScreen, openRaceDetail, safeHomeMode }),
           screen === "add" && h(AddMemo, { onSave: addMemo, onCancel: () => setScreen("home") }),
           screen === "import" && h(RaceImport, { onSave: addRaceCard }),
           screen === "result" && h(ResultImport, { raceCards, selectedRaceId, averageTimes, onSave: saveRaceResult, openHorse }),
@@ -1241,13 +1262,14 @@ export function createKeibaApp(React, icons) {
     );
   }
 
-  function Home({ raceCards, setScreen, openRaceDetail }) {
+  function Home({ raceCards, setScreen, openRaceDetail, safeHomeMode }) {
     const sortedRaceCards = safeArray(raceCards).map(sanitizeRaceCard).sort((a, b) =>
       String(a.raceInfo?.raceDate || "").localeCompare(String(b.raceInfo?.raceDate || ""))
       || Number(a.raceInfo?.raceNumber || 0) - Number(b.raceInfo?.raceNumber || 0)
     );
 
     return h("section", { className: "screen home" },
+      safeHomeMode && h("div", { className: "warning-panel" }, "安全表示でホームを開きました。馬別成績、回顧メモ、平均タイムは残しています。出走表を再登録できます。"),
       storageWarnings.length > 0 && h("div", { className: "warning-panel" }, [...new Set(storageWarnings)].join(" ")),
       h("div", { className: "home-actions" },
         h(HomeAction, { title: "レース結果インポート", text: "登録済みレースに結果を貼り付け", icon: h(ClipboardList, { size: 20 }), onClick: () => setScreen("result") }),
