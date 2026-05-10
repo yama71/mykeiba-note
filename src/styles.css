@@ -301,6 +301,13 @@ button {
   text-align: right;
 }
 
+.race-winner-line {
+  color: #2f6b4f;
+  font-size: 12px;
+  font-weight: 900;
+  line-height: 1.25;
+}
+
 .card-stack {
   display: grid;
   gap: 12px;
@@ -1542,6 +1549,71 @@ textarea:focus {
 
 .compact-detail-runners .race-runner-card {
   box-shadow: none;
+}
+
+.result-status-panel > strong {
+  font-size: 18px;
+}
+
+.result-card-stack {
+  display: grid;
+  gap: 10px;
+}
+
+.result-card-stack.top3 {
+  gap: 8px;
+}
+
+.result-horse-card {
+  width: 100%;
+  display: grid;
+  grid-template-columns: 50px 1fr;
+  gap: 10px;
+  align-items: start;
+  padding: 10px;
+  border: 1px solid #ded6c8;
+  border-radius: 8px;
+  color: #24221d;
+  background: #fff;
+  text-align: left;
+}
+
+.result-horse-card.compact {
+  padding: 9px;
+}
+
+.result-rank {
+  padding: 8px 4px;
+  border-radius: 8px;
+  color: #1f6a5d;
+  background: #eaf3ee;
+  font-size: 15px;
+  font-weight: 900;
+  text-align: center;
+  white-space: nowrap;
+}
+
+.result-horse-body {
+  min-width: 0;
+}
+
+.result-horse-body h4 {
+  margin: 0 0 4px;
+  font-size: 16px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.result-horse-body p {
+  margin: 2px 0;
+  color: #6b6254;
+  font-size: 13px;
+  font-weight: 800;
+  line-height: 1.45;
+}
+
+.result-horse-body .corner-line {
+  color: #3c372e;
 }
 
 .error-text {
