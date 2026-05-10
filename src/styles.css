@@ -1020,6 +1020,55 @@ textarea:focus {
   font-weight: 800;
 }
 
+.lookup-note {
+  margin: -4px 0 4px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  color: #4e493f;
+  background: #f2eee5;
+  font-size: 13px;
+  font-weight: 800;
+  line-height: 1.45;
+}
+
+.average-screen {
+  display: grid;
+  gap: 14px;
+}
+
+.average-list {
+  display: grid;
+  gap: 10px;
+}
+
+.average-card {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 4px 10px;
+  align-items: center;
+  padding: 12px;
+  border: 1px solid #ded6c8;
+  border-radius: 8px;
+  background: #fffdf8;
+}
+
+.average-card strong {
+  font-size: 15px;
+  overflow-wrap: anywhere;
+}
+
+.average-card span {
+  color: #6b6254;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.average-card b {
+  grid-row: span 2;
+  color: #1f6a5d;
+  font-size: 18px;
+}
+
 .error-text {
   margin: 0;
   color: #a63f34;
