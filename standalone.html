@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#f7f5ef" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-title" content="MyKeiba Note" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <link rel="manifest" href="./manifest.json" />
+    <link rel="icon" href="./icon.svg" type="image/svg+xml" />
+    <link rel="apple-touch-icon" href="./icon.svg" />
+    <title>MyKeiba Note</title>
+    <link rel="stylesheet" href="./src/styles.css" />
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module">
+      import React, { useEffect, useMemo, useState } from "https://esm.sh/react@19.0.0";
+      import { createRoot } from "https://esm.sh/react-dom@19.0.0/client";
+      import {
+        CalendarDays,
+        ChevronLeft,
+        ClipboardList,
+        Clock,
+        ListChecks,
+        Plus,
+        Search,
+        Star,
+        Tag,
+        Trash2,
+        Trophy,
+      } from "https://esm.sh/lucide-react@0.468.0?deps=react@19.0.0";
+      import { createKeibaApp } from "./src/app-core.js";
+
+      const App = createKeibaApp(React, {
+        CalendarDays,
+        ChevronLeft,
+        ClipboardList,
+        Clock,
+        ListChecks,
+        Plus,
+        Search,
+        Star,
+        Tag,
+        Trash2,
+        Trophy,
+      });
+
+      createRoot(document.getElementById("root")).render(React.createElement(App));
+    </script>
+  </body>
+</html>
