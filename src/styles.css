@@ -1125,6 +1125,7 @@ textarea:focus {
 }
 
 .warning-panel,
+.success-panel,
 .error-panel {
   padding: 14px;
   border: 1px solid #d5a15d;
@@ -1134,6 +1135,12 @@ textarea:focus {
   font-size: 14px;
   font-weight: 800;
   line-height: 1.55;
+}
+
+.success-panel {
+  color: #1f6a5d;
+  border-color: #9dccbd;
+  background: #eefaf5;
 }
 
 .preview-panel {
@@ -1186,6 +1193,32 @@ textarea:focus {
   background: #e6f4ef;
   font-size: 12px;
   font-weight: 900;
+}
+
+.debug-panel {
+  display: grid;
+  gap: 6px;
+  padding: 12px;
+  border: 1px dashed #c7bda9;
+  border-radius: 8px;
+  background: #fffdf8;
+}
+
+.debug-panel h3,
+.debug-panel p {
+  margin: 0;
+}
+
+.debug-panel h3 {
+  color: #4e493f;
+  font-size: 14px;
+}
+
+.debug-panel p {
+  overflow-wrap: anywhere;
+  color: #6b6254;
+  font-size: 12px;
+  line-height: 1.45;
 }
 
 .error-panel {

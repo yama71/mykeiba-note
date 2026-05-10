@@ -8,12 +8,14 @@ const BROKEN_WEEKLY_RACES_KEY = "keiba-broken-weekly-races-v1";
 const BROKEN_RACE_ENTRIES_KEY = "keiba-broken-race-entries-v1";
 const BROKEN_RACE_RESULTS_KEY = "keiba-broken-race-results-v1";
 const FORCE_HOME_STORAGE_KEY = "keiba-force-home-v1";
+const WEEKLY_RACES_COMPAT_KEY = "weeklyRaces";
+const RACE_ENTRIES_COMPAT_KEY = "raceEntries";
 const BACKUP_VERSION = 1;
 const STORAGE_ALIASES = {
   horseNotes: MEMO_STORAGE_KEY,
   horseRecords: HORSE_RECORDS_STORAGE_KEY,
-  weeklyRaces: RACE_STORAGE_KEY,
-  raceEntries: RACE_STORAGE_KEY,
+  weeklyRaces: WEEKLY_RACES_COMPAT_KEY,
+  raceEntries: RACE_ENTRIES_COMPAT_KEY,
   raceResults: RACE_STORAGE_KEY,
   averageTimes: AVERAGE_TIMES_STORAGE_KEY,
   brokenWeeklyRaces: BROKEN_WEEKLY_RACES_KEY,
@@ -181,8 +183,8 @@ function emergencyResetRaceEntriesOnly() {
   saveRawJsonArray(RACE_STORAGE_KEY);
   saveRawJsonArray(BROKEN_WEEKLY_RACES_KEY);
   saveRawJsonArray(BROKEN_RACE_ENTRIES_KEY);
-  saveRawJsonArray("weeklyRaces");
-  saveRawJsonArray("raceEntries");
+  saveRawJsonArray(WEEKLY_RACES_COMPAT_KEY);
+  saveRawJsonArray(RACE_ENTRIES_COMPAT_KEY);
   saveRawJsonArray("brokenWeeklyRaces");
   saveRawJsonArray("brokenRaceEntries");
 }
@@ -867,6 +869,59 @@ function sanitizeRaceCards(raceCards) {
   return safeArray(raceCards).map(sanitizeRaceCard);
 }
 
+function normalizeStoredRaceCards(raceCards) {
+  return sanitizeReadableRaceCards(raceCards);
+}
+
+function loadRaceCardsFromStorage() {
+  const main = normalizeStoredRaceCards(loadJson(RACE_STORAGE_KEY));
+  if (main.length > 0) return main;
+
+  const weekly = normalizeStoredRaceCards(loadJson(WEEKLY_RACES_COMPAT_KEY));
+  if (weekly.length > 0) return weekly;
+
+  const raceEntries = loadJson(RACE_ENTRIES_COMPAT_KEY);
+  const entryLike = raceEntries.some((item) => item?.horseName || item?.horseNumber || item?.frame || item?.frameNumber);
+  if (entryLike && raceEntries.length > 0) {
+    return normalizeStoredRaceCards([{
+      id: makeId("race"),
+      raceId: makeId("race"),
+      date: "",
+      racecourse: "未設定",
+      raceNumber: "未設定",
+      raceName: "名称未設定",
+      raceClass: "",
+      surface: "",
+      distance: null,
+      going: "",
+      startTime: "",
+      entries: raceEntries,
+    }]);
+  }
+  return normalizeStoredRaceCards(raceEntries);
+}
+
+function persistRaceCardsToStorage(raceCards) {
+  const storageCards = safeArray(raceCards).map(toStorageRaceCard);
+  saveJson(RACE_STORAGE_KEY, storageCards);
+  saveJson(WEEKLY_RACES_COMPAT_KEY, storageCards);
+  saveJson(RACE_ENTRIES_COMPAT_KEY, storageCards);
+  return storageCards;
+}
+
+function verifyStoredRaceCard(raceId, expectedEntryCount) {
+  const stored = loadJson(RACE_STORAGE_KEY);
+  const found = stored.find((race) => race?.id === raceId || race?.raceId === raceId);
+  const entries = safeArray(found?.entries);
+  return {
+    ok: Boolean(found && Array.isArray(found.entries) && entries.length === expectedEntryCount),
+    count: stored.length,
+    found: Boolean(found),
+    entriesIsArray: Boolean(found && Array.isArray(found.entries)),
+    entryCount: entries.length,
+  };
+}
+
 function isReadableRaceCard(race) {
   const info = race?.raceInfo || {};
   return Boolean(race?.id && info.raceDate && info.raceNumber && info.track && Array.isArray(race.entries));
@@ -897,11 +952,14 @@ function sanitizeReadableRaceCards(raceCards) {
 function validateRaceCard(raceCard) {
   const errors = [];
   const race = sanitizeRaceCard(raceCard);
-  if (!race.raceInfo.raceDate) errors.push("開催日を入力してください。");
-  if (!race.raceInfo.track) errors.push("競馬場を入力してください。");
-  if (!race.raceInfo.raceNumber) errors.push("レース番号を入力してください。");
   const validEntries = race.entries.filter((entry) => normalizeHorseName(entry.horseName));
   if (validEntries.length === 0) errors.push("馬名が1件も取得できていません。");
+  race.raceInfo = sanitizeRaceInfo({
+    ...race.raceInfo,
+    raceName: race.raceInfo.raceName || "名称未設定",
+    track: race.raceInfo.track || "未設定",
+    raceNumber: race.raceInfo.raceNumber || "未設定",
+  });
   race.entries = validEntries;
   return { race, errors };
 }
@@ -1115,7 +1173,8 @@ export function createKeibaApp(React, icons) {
     const [screen, setScreen] = useState("home");
     const [safeHomeMode] = useState(() => localStorage.getItem(FORCE_HOME_STORAGE_KEY) === "1");
     const [memos, setMemos] = useState(() => loadJson(MEMO_STORAGE_KEY));
-    const [raceCards, setRaceCards] = useState(() => safeHomeMode ? [] : sanitizeReadableRaceCards(loadJson(RACE_STORAGE_KEY)));
+    const [raceCards, setRaceCards] = useState(() => safeHomeMode ? [] : loadRaceCardsFromStorage());
+    const [skipNextRaceSave, setSkipNextRaceSave] = useState(safeHomeMode);
     const [horseRecords, setHorseRecords] = useState(() => {
       const savedRecords = loadJson(HORSE_RECORDS_STORAGE_KEY);
       return savedRecords.length > 0 ? savedRecords : buildHorseRecordsFromRaceCards(sanitizeRaceCards(loadJson(RACE_STORAGE_KEY)));
@@ -1127,12 +1186,13 @@ export function createKeibaApp(React, icons) {
 
     useEffect(() => saveJson(MEMO_STORAGE_KEY, memos), [memos]);
     useEffect(() => {
-      if (safeHomeMode) {
+      if (skipNextRaceSave) {
         localStorage.removeItem(FORCE_HOME_STORAGE_KEY);
+        setSkipNextRaceSave(false);
         return;
       }
-      saveJson(RACE_STORAGE_KEY, safeArray(raceCards).map(toStorageRaceCard));
-    }, [raceCards, safeHomeMode]);
+      persistRaceCardsToStorage(raceCards);
+    }, [raceCards, skipNextRaceSave]);
     useEffect(() => saveJson(HORSE_RECORDS_STORAGE_KEY, horseRecords), [horseRecords]);
     useEffect(() => saveJson(AVERAGE_TIMES_STORAGE_KEY, averageTimes), [averageTimes]);
 
@@ -1180,12 +1240,37 @@ export function createKeibaApp(React, icons) {
     }
 
     function addRaceCard(raceCard) {
-      const now = new Date().toISOString();
-      const id = crypto.randomUUID();
-      const nextRaceCard = sanitizeRaceCard(toStorageRaceCard({ ...raceCard, id, raceId: id, createdAt: now, updatedAt: now }));
-      setRaceCards((current) => [nextRaceCard, ...current]);
-      notify("出走表を登録しました");
-      setScreen("home");
+      try {
+        const now = new Date().toISOString();
+        const id = crypto.randomUUID();
+        const beforeCount = loadJson(RACE_STORAGE_KEY).length;
+        const nextRaceCard = sanitizeRaceCard(toStorageRaceCard({ ...raceCard, id, raceId: id, createdAt: now, updatedAt: now }));
+        const entryCount = safeArray(nextRaceCard.entries).length;
+        const currentCards = sanitizeRaceCards(raceCards);
+        const nextCards = [nextRaceCard, ...currentCards.filter((race) => race.id !== nextRaceCard.id)];
+        persistRaceCardsToStorage(nextCards);
+        const verification = verifyStoredRaceCard(nextRaceCard.id, entryCount);
+        if (!verification.ok) {
+          return {
+            ok: false,
+            message: "localStorage保存後の確認に失敗しました",
+            debug: { beforeCount, afterCount: verification.count, raceId: nextRaceCard.id, entryCount, verification },
+          };
+        }
+        setRaceCards(nextCards);
+        setSelectedRaceId(nextRaceCard.id);
+        notify(`登録しました：${nextRaceCard.raceInfo.track}${nextRaceCard.raceInfo.raceNumber}R ${nextRaceCard.raceInfo.raceName} / ${entryCount}頭`);
+        setScreen("race");
+        return {
+          ok: true,
+          message: `登録しました：${nextRaceCard.raceInfo.track}${nextRaceCard.raceInfo.raceNumber}R ${nextRaceCard.raceInfo.raceName} / ${entryCount}頭`,
+          confirmation: `保存確認OK：${RACE_STORAGE_KEY} に${verification.count}件保存 / entries ${verification.entryCount}頭`,
+          debug: { beforeCount, afterCount: verification.count, raceId: nextRaceCard.id, entryCount, verification },
+        };
+      } catch (error) {
+        console.error("Race card save failed", error);
+        return { ok: false, message: "保存に失敗しました", debug: { error: String(error) } };
+      }
     }
 
     function deleteMemo(id) {
@@ -1300,6 +1385,8 @@ export function createKeibaApp(React, icons) {
     const [pasteText, setPasteText] = useState("");
     const [entries, setEntries] = useState([]);
     const [warning, setWarning] = useState("");
+    const [saveMessage, setSaveMessage] = useState("");
+    const [saveDebug, setSaveDebug] = useState({ beforeCount: loadJson(RACE_STORAGE_KEY).length, afterCount: loadJson(RACE_STORAGE_KEY).length, raceId: "", status: "未保存" });
     const [showPreview, setShowPreview] = useState(false);
     const safeEntries = safeArray(entries).map(sanitizeRaceEntry);
     const validEntryCount = safeEntries.filter((entry) => normalizeHorseName(entry.horseName)).length;
@@ -1354,14 +1441,20 @@ export function createKeibaApp(React, icons) {
       const validation = validateRaceCard(preparedRaceCard);
       if (validation.errors.length > 0) {
         setWarning(validation.errors.join(" "));
+        setSaveMessage("");
+        setSaveDebug((current) => ({ ...current, status: "失敗" }));
         return;
       }
-      onSave(validation.race);
-      setRaceInfo(emptyRaceInfo);
-      setPasteText("");
-      setEntries([]);
+      const result = onSave(validation.race);
+      if (!result?.ok) {
+        setWarning(result?.message || "保存に失敗しました");
+        setSaveMessage("");
+        setSaveDebug({ beforeCount: result?.debug?.beforeCount ?? loadJson(RACE_STORAGE_KEY).length, afterCount: result?.debug?.afterCount ?? loadJson(RACE_STORAGE_KEY).length, raceId: result?.debug?.raceId || "", status: "失敗" });
+        return;
+      }
       setWarning("");
-      setShowPreview(false);
+      setSaveMessage(`${result.message} / ${result.confirmation}`);
+      setSaveDebug({ beforeCount: result.debug.beforeCount, afterCount: result.debug.afterCount, raceId: result.debug.raceId, status: "成功" });
     }
 
     return h("form", { className: "screen form-screen", onSubmit: submit },
@@ -1395,6 +1488,7 @@ export function createKeibaApp(React, icons) {
       ),
       h(SectionTitle, { icon: h(ClipboardList, { size: 18 }), title: `抽出結果 ${entries.length}頭` }),
       warning && h("div", { className: "warning-panel" }, warning),
+      saveMessage && h("div", { className: "success-panel" }, saveMessage),
       h("div", { className: "form-actions inline-actions" },
         h("button", { type: "button", className: "secondary", onClick: () => setShowPreview((current) => !current) }, "保存予定データを確認")
       ),
@@ -1411,6 +1505,15 @@ export function createKeibaApp(React, icons) {
       h("div", { className: "form-actions" },
         h("button", { type: "button", className: "secondary", onClick: () => setEntries([]) }, "結果クリア"),
         h("button", { className: "primary" }, "登録")
+      ),
+      h("section", { className: "debug-panel" },
+        h("h3", null, "登録デバッグ"),
+        h("p", null, `解析済み entries 件数: ${safeEntries.length}`),
+        h("p", null, `保存先キー: ${RACE_STORAGE_KEY}`),
+        h("p", null, `登録前の保存件数: ${saveDebug.beforeCount}`),
+        h("p", null, `登録後の保存件数: ${saveDebug.afterCount}`),
+        h("p", null, `最後に登録した raceId: ${saveDebug.raceId || "-"}`),
+        h("p", null, `最後の保存結果: ${saveDebug.status}`)
       )
     );
   }
@@ -1858,6 +1961,16 @@ export function createKeibaApp(React, icons) {
       registerableHorses: validCount,
       unparsedRows: unparsedCount,
       entriesIsArray: isRaceEntryPreview ? Array.isArray(storagePreview.entries) : Array.isArray(storagePreview.rows),
+      storageKey: isRaceEntryPreview ? RACE_STORAGE_KEY : "race result on selected race",
+      raceId: storagePreview.raceId || storagePreview.id || "",
+      raceName: storagePreview.raceName || info.raceName || "",
+      racecourse: storagePreview.racecourse || info.track || "",
+      raceNumber: storagePreview.raceNumber || info.raceNumber || "",
+      surface: storagePreview.surface || info.surface || "",
+      distance: storagePreview.distance ?? info.distance ?? "",
+      raceClass: storagePreview.raceClass || info.raceClass || "",
+      entriesCount: safeArray(storagePreview.entries || storagePreview.rows).length,
+      firstThreeHorseNames: safeArray(storagePreview.entries || storagePreview.rows).slice(0, 3).map((entry) => entry.horseName || "馬名未入力"),
       storagePreview,
     };
 
