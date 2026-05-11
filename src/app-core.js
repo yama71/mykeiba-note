@@ -592,6 +592,59 @@ function parseResultRows(text, raceCard) {
   return rows.length > 0 ? rows : [makeResultRow(text.trim())];
 }
 
+function parseRaceResultMeta(text, raceInfo = {}) {
+  const rawLines = String(text || "").split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  const joined = rawLines.join("\n");
+  const lapMatch = joined.match(/ハロンタイム\s*([0-9.\s\-]+)/);
+  const climbMatch = joined.match(/上り\s*4F\s*([0-9.]+)\s*-\s*3F\s*([0-9.]+)/);
+  const lapTimes = lapMatch ? (lapMatch[1].match(/\d+(?:\.\d+)?/g) || []) : [];
+  const cornerPassages = {};
+
+  [1, 2, 3, 4].forEach((corner) => {
+    const labelPattern = new RegExp(`^${corner}\\s*コーナー`);
+    const index = rawLines.findIndex((line) => labelPattern.test(line));
+    if (index < 0) return;
+    const sameLine = rawLines[index].replace(labelPattern, "").trim();
+    const passage = sameLine || rawLines[index + 1] || "";
+    if (passage) cornerPassages[String(corner)] = passage;
+  });
+
+  const half = calculateHalfTimes(lapTimes, raceInfo.distance);
+  return {
+    lapTimes,
+    last4F: climbMatch?.[1] || "",
+    last3F: climbMatch?.[2] || "",
+    firstHalfTime: half.firstHalfTime,
+    secondHalfTime: half.secondHalfTime,
+    halfDiff: half.halfDiff,
+    cornerPassages,
+  };
+}
+
+function calculateHalfTimes(lapTimes, distance) {
+  const laps = safeArray(lapTimes).map((value) => Number(value)).filter((value) => Number.isFinite(value));
+  if (laps.length === 0) return { firstHalfTime: "", secondHalfTime: "", halfDiff: "" };
+  let first = 0;
+  let second = 0;
+  if (laps.length % 2 === 0) {
+    const halfIndex = laps.length / 2;
+    first = laps.slice(0, halfIndex).reduce((sum, lap) => sum + lap, 0);
+    second = laps.slice(halfIndex).reduce((sum, lap) => sum + lap, 0);
+  } else {
+    const centerIndex = Math.floor(laps.length / 2);
+    first = laps.slice(0, centerIndex).reduce((sum, lap) => sum + lap, 0) + laps[centerIndex] / 2;
+    second = laps[centerIndex] / 2 + laps.slice(centerIndex + 1).reduce((sum, lap) => sum + lap, 0);
+  }
+
+  if (first === 0 || second === 0) return { firstHalfTime: "", secondHalfTime: "", halfDiff: "" };
+  const diff = second - first;
+  return {
+    firstHalfTime: first.toFixed(1),
+    secondHalfTime: second.toFixed(1),
+    halfDiff: `${diff >= 0 ? "+" : ""}${diff.toFixed(1)}`,
+  };
+}
+
 function parseResultHorseLine(line) {
   const cleaned = line.replace(/ブリンカー/g, " ").replace(/\s+/g, " ").trim();
   const matched = cleaned.match(/^(.+?)(\d{1,2})番人気$/);
@@ -724,15 +777,23 @@ function judgeTrackTrend(winningTime, averageWinningTime) {
   return "時計がかかる馬場の可能性";
 }
 
-function buildRaceResult(rows, averageWinningTime) {
+function buildRaceResult(rows, averageWinningTime, sourceText = "", raceInfo = {}) {
   const safeRows = safeArray(rows).map(sanitizeResultRow);
   const sortedRows = [...safeRows].sort((a, b) => Number(a.finish || 999) - Number(b.finish || 999));
   const winningTime = sortedRows[0]?.time || "";
+  const meta = parseRaceResultMeta(sourceText, raceInfo);
   return {
     status: "result_registered",
     rows: safeRows,
     fullResults: safeRows,
     top3: sortedRows.slice(0, 3),
+    lapTimes: meta.lapTimes,
+    last4F: meta.last4F,
+    last3F: meta.last3F,
+    firstHalfTime: meta.firstHalfTime,
+    secondHalfTime: meta.secondHalfTime,
+    halfDiff: meta.halfDiff,
+    cornerPassages: meta.cornerPassages,
     averageWinningTime: averageWinningTime || "",
     winningTime,
     paceBias: judgePaceBias(safeRows),
@@ -2083,7 +2144,7 @@ export function createKeibaApp(React, icons) {
     const safeRows = safeArray(rows).map(sanitizeResultRow);
     const validResultCount = safeRows.filter((row) => normalizeHorseName(row.horseName)).length;
     const unparsedResultCount = Math.max(0, safeRows.length - validResultCount);
-    const resultPreview = buildRaceResult(rows, averageWinningTime);
+    const resultPreview = buildRaceResult(rows, averageWinningTime, pasteText, raceInfoDraft);
     const matchedAverageTime = findAverageTime(averageTimes, raceInfoDraft);
 
     useEffect(() => {
@@ -2167,7 +2228,7 @@ export function createKeibaApp(React, icons) {
         last3f: String(row.last3f || "").trim(),
         corner3: String(row.corner3 || "").trim(),
         corner4: String(row.corner4 || "").trim(),
-      })), String(averageWinningTime || "").trim()), {
+      })), String(averageWinningTime || "").trim(), pasteText, mergedRaceInfo), {
         ...mergedRaceInfo,
         raceClass: mergedRaceInfo.raceClass ? normalizeRaceClass(mergedRaceInfo.raceClass) : "",
         distance: String(mergedRaceInfo.distance || "").trim(),
@@ -2234,6 +2295,7 @@ export function createKeibaApp(React, icons) {
             rows: safeRows,
             validCount: validResultCount,
             unparsedCount: unparsedResultCount,
+            resultMeta: resultPreview,
           }),
           rows.length === 0
             ? h(EmptyState, { title: "まだ解析結果がありません", text: "結果テキストを貼り付けて解析してください。" })
@@ -2395,6 +2457,7 @@ export function createKeibaApp(React, icons) {
     const top3 = resultRows.slice(0, 3);
     const hasResult = hasRaceResult(race, horseRecords);
     const entries = safeArray(race.entries);
+    const resultMeta = race.result || {};
     const renderAverage = () => h("section", { className: "race-detail-panel" },
       h("h3", null, "平均タイム"),
       h("strong", null, average ? average.averageTime : "平均タイム未登録"),
@@ -2436,6 +2499,8 @@ export function createKeibaApp(React, icons) {
             h("h3", null, "結果サマリー"),
             top3.length ? renderResultList(top3, true) : h("p", null, "表示できる結果データがありません。")
           ),
+          h(RaceLapPanel, { result: resultMeta }),
+          h(CornerPassagePanel, { cornerPassages: resultMeta.cornerPassages }),
           h("div", { className: "race-detail-actions" },
             h("button", { type: "button", className: "secondary", onClick: () => setShowAllResults((current) => !current) }, showAllResults ? "全着順を閉じる" : "全着順を見る"),
             h("button", { type: "button", className: "secondary", onClick: () => setShowEntries((current) => !current) }, showEntries ? "出走表を閉じる" : "出走表を見る"),
@@ -2466,6 +2531,36 @@ export function createKeibaApp(React, icons) {
         h("p", null, [safeRow.time || "タイム未入力", safeRow.margin ? `着差${safeRow.margin}` : "", safeRow.last3f ? `上がり${safeRow.last3f}` : ""].filter(Boolean).join(" / ")),
         h("p", { className: "corner-line" }, [`3角${safeRow.corner3 || "-"}番手`, `4角${safeRow.corner4 || "-"}番手`].join(" / "))
       )
+    );
+  }
+
+  function RaceLapPanel({ result }) {
+    const laps = safeArray(result?.lapTimes).filter(Boolean);
+    const hasLapInfo = laps.length > 0 || result?.last4F || result?.last3F;
+    if (!hasLapInfo) return null;
+    return h("section", { className: "race-detail-panel race-lap-panel" },
+      h("h3", null, "レースラップ"),
+      laps.length > 0 && h("p", { className: "lap-line" }, laps.join(" - ")),
+      h("div", { className: "lap-summary-grid" },
+        h("span", null, h("small", null, "前半"), h("strong", null, result.firstHalfTime || "計算不可")),
+        h("span", null, h("small", null, "後半"), h("strong", null, result.secondHalfTime || "計算不可")),
+        h("span", null, h("small", null, "前後半差"), h("strong", null, result.halfDiff || "計算不可")),
+        h("span", null, h("small", null, "上り4F"), h("strong", null, result.last4F || "-")),
+        h("span", null, h("small", null, "上り3F"), h("strong", null, result.last3F || "-"))
+      )
+    );
+  }
+
+  function CornerPassagePanel({ cornerPassages }) {
+    const passages = cornerPassages || {};
+    const corners = ["1", "2", "3", "4"].filter((corner) => String(passages[corner] || "").trim());
+    if (corners.length === 0) return null;
+    return h("section", { className: "race-detail-panel corner-passage-panel" },
+      h("h3", null, "コーナー通過順位"),
+      corners.map((corner) => h("div", { key: corner, className: "corner-passage-row" },
+        h("strong", null, `${corner}コーナー`),
+        h("p", null, passages[corner])
+      ))
     );
   }
 
@@ -2598,7 +2693,7 @@ export function createKeibaApp(React, icons) {
     );
   }
 
-  function RegistrationPreview({ title, raceInfo, rows, validCount, unparsedCount }) {
+  function RegistrationPreview({ title, raceInfo, rows, validCount, unparsedCount, resultMeta }) {
     const info = sanitizeRaceInfo(raceInfo);
     const isRaceEntryPreview = title.includes("出走表");
     const storagePreview = isRaceEntryPreview
@@ -2640,6 +2735,13 @@ export function createKeibaApp(React, icons) {
       raceClass: storagePreview.raceClass || info.raceClass || "",
       entriesCount: safeArray(storagePreview.entries || storagePreview.rows).length,
       firstThreeHorseNames: safeArray(storagePreview.entries || storagePreview.rows).slice(0, 3).map((entry) => entry.horseName || "馬名未入力"),
+      lapTimes: safeArray(resultMeta?.lapTimes),
+      last4F: resultMeta?.last4F || "",
+      last3F: resultMeta?.last3F || "",
+      firstHalfTime: resultMeta?.firstHalfTime || "",
+      secondHalfTime: resultMeta?.secondHalfTime || "",
+      halfDiff: resultMeta?.halfDiff || "",
+      cornerPassages: resultMeta?.cornerPassages || {},
       storagePreview,
     };
 
@@ -2651,6 +2753,8 @@ export function createKeibaApp(React, icons) {
         h("span", null, `entries配列: ${summary.entriesIsArray ? "はい" : "いいえ"}`)
       ),
       h("p", null, `${info.track || "競馬場未入力"} ${raceNumberLabel(info.raceNumber) || "レース番号未入力"} ${info.raceName || "レース名未入力"}`),
+      resultMeta && h(RaceLapPanel, { result: resultMeta }),
+      resultMeta && h(CornerPassagePanel, { cornerPassages: resultMeta.cornerPassages }),
       h("pre", null, JSON.stringify(summary, null, 2))
     );
   }
@@ -3056,7 +3160,6 @@ export function createKeibaApp(React, icons) {
           tags.length > 0 && h("div", { className: "tag-row compact-tags" }, tags.map((tag) => h("span", { key: tag }, tag)))
         ),
         h("div", { className: "inline-actions record-actions" },
-          h("button", { type: "button", className: "secondary small", onClick: onWriteMemo }, "このレースのメモを書く"),
           h("button", { type: "button", className: "primary small", onClick: onOpenRace }, "このレース結果を詳しく見る")
         )
       )
