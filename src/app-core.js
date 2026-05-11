@@ -1360,12 +1360,12 @@ function resultRowsFromRace(race, horseRecords = []) {
   const directRows = safeArray(safeRace.result?.fullResults).length > 0
     ? safeArray(safeRace.result.fullResults)
     : safeArray(safeRace.result?.rows || safeRace.results);
-  if (directRows.length > 0) return directRows.map(sanitizeResultRow);
+  if (directRows.length > 0) return enrichRowsWithFirstFurlong(directRows, safeRace.result);
 
   const raceId = safeRace.raceId || safeRace.id;
   const storedResult = loadJson("raceResults").find((item) => item?.raceId === raceId || item?.id === raceId);
   const storedRows = safeArray(storedResult?.result?.fullResults || storedResult?.result?.rows || storedResult?.fullResults || storedResult?.rows || storedResult?.results);
-  if (storedRows.length > 0) return storedRows.map(sanitizeResultRow);
+  if (storedRows.length > 0) return enrichRowsWithFirstFurlong(storedRows, storedResult?.result || storedResult);
 
   return safeArray(horseRecords)
     .filter((record) => record.raceId === raceId || record.raceId === safeRace.id || record.raceId === safeRace.raceId)
@@ -1386,6 +1386,16 @@ function resultRowsFromRace(race, horseRecords = []) {
       corner4: record.corner4,
       firstFurlongEstimate: record.firstFurlongEstimate || "-",
       parsed: true,
+    }));
+}
+
+function enrichRowsWithFirstFurlong(rows, resultMeta) {
+  const firstFurlongMap = buildFirstFurlongMap(resultMeta || {});
+  return safeArray(rows)
+    .map(sanitizeResultRow)
+    .map((row) => ({
+      ...row,
+      firstFurlongEstimate: row.firstFurlongEstimate && row.firstFurlongEstimate !== "-" ? row.firstFurlongEstimate : firstFurlongMap[String(row.horseNumber || "")] || "-",
     }));
 }
 
@@ -2662,20 +2672,14 @@ export function createKeibaApp(React, icons) {
   }
 
   function resultRowsFromResult(result) {
-    const firstFurlongMap = buildFirstFurlongMap(result || {});
-    return safeArray(result?.fullResults || result?.rows || result?.top3)
-      .map(sanitizeResultRow)
-      .map((row) => ({
-        ...row,
-        firstFurlongEstimate: row.firstFurlongEstimate && row.firstFurlongEstimate !== "-" ? row.firstFurlongEstimate : firstFurlongMap[String(row.horseNumber || "")] || "-",
-      }));
+    return enrichRowsWithFirstFurlong(result?.fullResults || result?.rows || result?.top3, result);
   }
 
   function renderCornerPassageTokens(passage, highlightMap) {
     return String(passage || "").split(/(\d{1,2})/g).filter((token) => token !== "").map((token, index) => {
       if (!/^\d{1,2}$/.test(token) || !highlightMap[token]) return h("span", { key: `${token}-${index}` }, token);
       const frame = Number(highlightMap[token]);
-      return h("span", { key: `${token}-${index}`, className: `corner-horse-chip frame-box frame-${frame}` }, token);
+      return h("span", { key: `${token}-${index}`, className: `corner-horse-chip corner-frame-${frame}` }, token);
     });
   }
 
@@ -2856,6 +2860,12 @@ export function createKeibaApp(React, icons) {
       firstHalfTime: resultMeta?.firstHalfTime || "",
       secondHalfTime: resultMeta?.secondHalfTime || "",
       halfDiff: resultMeta?.halfDiff || "",
+      firstFurlongBase: resultMeta?.firstFurlongBase || "",
+      firstFurlongCorner: resultMeta?.firstFurlongCorner || "",
+      firstFurlongTopHorseNumbers: safeArray(resultMeta?.firstFurlongTopHorseNumbers),
+      firstFurlongEstimates: enrichRowsWithFirstFurlong(rows, resultMeta)
+        .slice(0, 8)
+        .map((row) => `${row.horseNumber || "-"}番 ${row.horseName || "馬名未入力"}: ${row.firstFurlongEstimate || "-"}`),
       cornerPassages: resultMeta?.cornerPassages || {},
       storagePreview,
     };

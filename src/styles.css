@@ -1700,17 +1700,53 @@ textarea:focus {
 }
 
 .corner-horse-chip {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 1.5em;
-  min-height: 1.5em;
-  padding: 0 5px;
-  margin: 0 1px;
-  border-radius: 999px;
-  font-size: 0.9em;
+  display: inline;
+  padding: 0;
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  font-size: 1em;
   font-weight: 900;
-  vertical-align: baseline;
+  line-height: inherit;
+}
+
+.corner-horse-chip.corner-frame-1 {
+  color: #222;
+  text-decoration: underline;
+  text-decoration-thickness: 2px;
+  text-decoration-color: #d8d2c8;
+}
+
+.corner-horse-chip.corner-frame-2 {
+  color: #111;
+}
+
+.corner-horse-chip.corner-frame-3 {
+  color: #d93030;
+}
+
+.corner-horse-chip.corner-frame-4 {
+  color: #2f6fd6;
+}
+
+.corner-horse-chip.corner-frame-5 {
+  color: #8a6500;
+  text-decoration: underline;
+  text-decoration-thickness: 2px;
+  text-decoration-color: #f4d03f;
+}
+
+.corner-horse-chip.corner-frame-6 {
+  color: #2e9d45;
+}
+
+.corner-horse-chip.corner-frame-7 {
+  color: #d96f08;
+}
+
+.corner-horse-chip.corner-frame-8 {
+  color: #d84f86;
 }
 
 .lap-note {
