@@ -1612,6 +1612,92 @@ textarea:focus {
   white-space: nowrap;
 }
 
+.frame-horse-numbers {
+  display: inline-grid;
+  grid-template-columns: 28px 34px;
+  gap: 4px;
+  align-items: center;
+  flex: 0 0 auto;
+}
+
+.frame-box,
+.horse-number-box {
+  min-height: 28px;
+  display: grid;
+  place-items: center;
+  border-radius: 7px;
+  border: 1px solid #d8d2c8;
+  font-size: 13px;
+  font-weight: 900;
+  line-height: 1;
+}
+
+.horse-number-box {
+  color: #24221d;
+  background: #f7f3eb;
+}
+
+.frame-box.frame-1 {
+  color: #222;
+  background: #fff;
+  border-color: #d8d2c8;
+}
+
+.frame-box.frame-2 {
+  color: #fff;
+  background: #222;
+  border-color: #222;
+}
+
+.frame-box.frame-3 {
+  color: #fff;
+  background: #d93030;
+  border-color: #d93030;
+}
+
+.frame-box.frame-4 {
+  color: #fff;
+  background: #2f6fd6;
+  border-color: #2f6fd6;
+}
+
+.frame-box.frame-5 {
+  color: #222;
+  background: #f4d03f;
+  border-color: #e5c335;
+}
+
+.frame-box.frame-6 {
+  color: #fff;
+  background: #2e9d45;
+  border-color: #2e9d45;
+}
+
+.frame-box.frame-7 {
+  color: #fff;
+  background: #f28c28;
+  border-color: #f28c28;
+}
+
+.frame-box.frame-8 {
+  color: #fff;
+  background: #e87aa4;
+  border-color: #e87aa4;
+}
+
+.frame-box.frame-unknown {
+  color: #4d463a;
+  background: #eee8dc;
+}
+
+.horse-line-title {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 8px;
+  align-items: center;
+  min-width: 0;
+}
+
 .result-horse-body {
   min-width: 0;
 }
@@ -1868,32 +1954,13 @@ textarea:focus {
 
 .runner-main {
   display: grid;
-  grid-template-columns: 42px 1fr;
+  grid-template-columns: auto 1fr;
   gap: 10px;
   align-items: start;
 }
 
 .runner-number {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  overflow: hidden;
-  border: 1px solid #d8cfbf;
-  border-radius: 8px;
-  background: #f2eee5;
-  text-align: center;
-}
-
-.runner-number span,
-.runner-number strong {
-  min-height: 32px;
-  display: grid;
-  place-items: center;
-  font-size: 13px;
-}
-
-.runner-number span {
-  color: #6b6254;
-  border-right: 1px solid #d8cfbf;
+  min-width: 66px;
 }
 
 .runner-title {

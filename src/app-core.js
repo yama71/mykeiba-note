@@ -1771,7 +1771,6 @@ export function createKeibaApp(React, icons) {
         h(HomeAction, { title: "平均タイム管理", text: "条件別の平均時計を見る", icon: h(Clock, { size: 20 }), onClick: () => setScreen("average") })
       ),
       h("div", { id: "weekly-races" }, h(SectionTitle, { icon: h(ClipboardList, { size: 18 }), title: "直近24レース" })),
-      h(StorageStatusDebug, { status: raceStorageStatus() }),
       recentRaceCards.length === 0
         ? h(EmptyState, { title: "登録済みの出走表はありません", text: "コピーした出走表を貼り付けて、まずは1レース登録できます。" })
         : h("div", { className: "compact-race-list" }, recentRaceCards.map((race) => h(RaceListItem, { key: race.id, race, horseRecords, onOpen: () => openRaceDetail(race.id) })))
@@ -1920,7 +1919,7 @@ export function createKeibaApp(React, icons) {
         h("p", null, `最後に登録した raceId: ${saveDebug.raceId || "-"}`),
         h("p", null, `最後の保存結果: ${saveDebug.status}`)
       ),
-      h(StorageStatusDebug, { status: raceStorageStatus() })
+      
     );
   }
 
@@ -2067,7 +2066,7 @@ export function createKeibaApp(React, icons) {
         ? h(React.Fragment, null,
           h(EmptyState, { title: "出走表がありません", text: "先に出走表を登録してください。" }),
           status.horseRecordRaces > 0 && h("button", { type: "button", className: "secondary full-button", onClick: () => runRecoveryAction(restoreRaceCardsFromHorseRecords) }, "馬別成績から出走表を復元"),
-          h(StorageStatusDebug, { status })
+          
         )
         : h(React.Fragment, null,
           currentRace && h("div", { className: "success-panel" }, `対象レース：${currentRace.raceInfo?.raceDate || "-"} ${currentRace.raceInfo?.track || "-"}${raceNumberLabel(currentRace.raceInfo?.raceNumber)} ${currentRace.raceInfo?.raceName || ""} ${currentRace.raceInfo?.surface || ""}${currentRace.raceInfo?.distance || ""}`),
@@ -2128,7 +2127,7 @@ export function createKeibaApp(React, icons) {
             h("button", { type: "button", className: "secondary", onClick: () => setRows([]) }, "結果クリア"),
             h("button", { className: "primary" }, "保存")
           ),
-          h(StorageStatusDebug, { status })
+          
         )
     );
   }
@@ -2195,7 +2194,7 @@ export function createKeibaApp(React, icons) {
     const displayRaceCards = sortRaceCardsRecent(allRaceCards.length > 0 ? allRaceCards : raceCards);
     return h("section", { className: "screen" },
       h(SectionTitle, { icon: h(ClipboardList, { size: 18 }), title: "登録済みレース一覧" }),
-      h(StorageStatusDebug, { status: raceStorageStatus() }),
+      
       displayRaceCards.length === 0
         ? h(EmptyState, { title: "登録済みレースはありません", text: "出走表インポートで登録すると、ここに表示されます。" })
         : h("div", { className: "compact-race-list" }, displayRaceCards.map((race) => h(RaceListItem, { key: race.id, race, onOpen: () => openRaceDetail(race.id) })))
@@ -2271,7 +2270,6 @@ export function createKeibaApp(React, icons) {
           info.going,
         ].filter(Boolean).map((item) => h("span", { key: item }, item)))
       ),
-      h(StorageStatusDebug, { status: raceStorageStatus() }),
       h("section", { className: "race-detail-panel result-status-panel" },
         h("h3", null, "結果ステータス"),
         h("strong", null, hasResult ? "結果：登録済み" : "結果：未登録")
@@ -2285,8 +2283,7 @@ export function createKeibaApp(React, icons) {
           h("div", { className: "race-detail-actions" },
             h("button", { type: "button", className: "secondary", onClick: () => setShowAllResults((current) => !current) }, showAllResults ? "全着順を閉じる" : "全着順を見る"),
             h("button", { type: "button", className: "secondary", onClick: () => setShowEntries((current) => !current) }, showEntries ? "出走表を閉じる" : "出走表を見る"),
-            h("button", { type: "button", className: "secondary", onClick: () => setScreen("add") }, "このレースの回顧メモを書く"),
-            h("button", { type: "button", className: "secondary", onClick: () => setScreen("home") }, "戻る")
+            h("button", { type: "button", className: "secondary", onClick: () => setScreen("add") }, "このレースの回顧メモを書く")
           ),
           showAllResults && h("section", { className: "race-detail-panel" }, h("h3", null, "全着順"), renderResultList(resultRows)),
           showEntries && renderEntries(),
@@ -2295,8 +2292,7 @@ export function createKeibaApp(React, icons) {
         : h(React.Fragment, null,
           h("div", { className: "race-detail-actions" },
             h("button", { type: "button", className: "primary", onClick: () => openResultImport(race.id) }, "このレースの結果を登録"),
-            h("button", { type: "button", className: "secondary", onClick: () => setScreen("add") }, "このレースの回顧メモを書く"),
-            h("button", { type: "button", className: "secondary", onClick: () => setScreen("home") }, "戻る")
+            h("button", { type: "button", className: "secondary", onClick: () => setScreen("add") }, "このレースの回顧メモを書く")
           ),
           renderEntries(),
           renderAverage()
@@ -2309,7 +2305,7 @@ export function createKeibaApp(React, icons) {
     return h("button", { type: "button", className: `result-horse-card ${compact ? "compact" : ""}`, onClick: () => openHorse(safeRow.horseName || "") },
       h("div", { className: "result-rank" }, `${safeRow.finish || "-"}着`),
       h("div", { className: "result-horse-body" },
-        h("h4", null, `${safeRow.frameNumber || "-"}枠${safeRow.horseNumber || "-"}番 ${safeRow.horseName || "馬名未入力"}`),
+        h("div", { className: "horse-line-title" }, h(FrameHorseNumbers, { frame: safeRow.frameNumber, horseNumber: safeRow.horseNumber }), h("h4", null, safeRow.horseName || "馬名未入力")),
         h("p", null, [safeRow.sexAge, `${safeRow.jockey || "騎手未入力"} ${safeRow.carriedWeight || "-"}`, safeRow.popularity ? `人気${safeRow.popularity}` : ""].filter(Boolean).join(" / ")),
         h("p", null, [safeRow.time || "タイム未入力", safeRow.margin ? `着差${safeRow.margin}` : "", safeRow.last3f ? `上がり${safeRow.last3f}` : ""].filter(Boolean).join(" / ")),
         h("p", { className: "corner-line" }, [`3角${safeRow.corner3 || "-"}番手`, `4角${safeRow.corner4 || "-"}番手`].join(" / "))
@@ -2317,9 +2313,19 @@ export function createKeibaApp(React, icons) {
     );
   }
 
+  function FrameHorseNumbers({ frame, horseNumber }) {
+    const frameText = String(frame || "-");
+    const frameClass = Number(frameText) >= 1 && Number(frameText) <= 8 ? `frame-${Number(frameText)}` : "frame-unknown";
+    return h("span", { className: "frame-horse-numbers" },
+      h("span", { className: `frame-box ${frameClass}` }, frameText),
+      h("span", { className: "horse-number-box" }, horseNumber || "-")
+    );
+  }
+
   function BackupScreen({ memos, raceCards, horseRecords, averageTimes, setMemos, setRaceCards, setHorseRecords, setAverageTimes, notify, setScreen, deleteEntryOnlyHorseRecords }) {
     const [importText, setImportText] = useState("");
     const [error, setError] = useState("");
+    const [showDebug, setShowDebug] = useState(false);
     const backupText = JSON.stringify(buildBackup(memos, raceCards, horseRecords, averageTimes), null, 2);
     const fileInputId = "backup-file-input";
 
@@ -2390,8 +2396,10 @@ export function createKeibaApp(React, icons) {
         h("p", null, "スマホで入力した回顧メモ、注目馬、出走表データをJSONファイルとして保存・復元できます。"),
         h("button", { type: "button", className: "secondary full-button", onClick: () => setScreen("diagnostic") }, "データ診断"),
         h("button", { type: "button", className: "secondary full-button", onClick: restoreRaceCards }, "馬別成績から出走表を復元"),
-        h("button", { type: "button", className: "danger-button full-button", onClick: deleteEntryOnlyHorseRecords }, "出走表登録で誤って作られた成績を削除")
+        h("button", { type: "button", className: "danger-button full-button", onClick: deleteEntryOnlyHorseRecords }, "出走表登録で誤って作られた成績を削除")
+        , h("button", { type: "button", className: "secondary full-button", onClick: () => setShowDebug((current) => !current) }, showDebug ? "デバッグ情報を閉じる" : "デバッグ情報を見る")
       ),
+      showDebug && h(StorageStatusDebug, { status: raceStorageStatus() }),
       h("div", { className: "backup-panel" },
         h("h2", null, "バックアップ書き出し"),
         h("p", null, "今のデータをJSONファイルとして保存します。機種変更前や、念のため残したい時に使います。"),
@@ -2576,10 +2584,7 @@ export function createKeibaApp(React, icons) {
 
     return h("button", { className: `race-runner-card ${attention === "A" ? "attention-a" : ""}`, type: "button", onClick: onOpen },
       h("div", { className: "runner-main" },
-        h("div", { className: "runner-number" },
-          h("span", null, entry.frameNumber || "-"),
-          h("strong", null, entry.horseNumber || "-")
-        ),
+        h("div", { className: "runner-number" }, h(FrameHorseNumbers, { frame: entry.frameNumber, horseNumber: entry.horseNumber })),
         h("div", null,
           h("div", { className: "runner-title" },
             h("h4", null, entry.horseName || "馬名未入力"),
@@ -2743,11 +2748,6 @@ export function createKeibaApp(React, icons) {
     return h("section", { className: "screen horse-page" }, !horseName || (history.length === 0 && records.length === 0)
       ? h(EmptyState, { title: "履歴が見つかりません", text: "注目馬リストか検索から馬を選んでください。", action: h("button", { className: "primary small", onClick: () => setScreen("list") }, "リストへ") })
       : h(React.Fragment, null,
-        h("div", { className: "page-actions" },
-          h("button", { type: "button", className: "secondary", onClick: goBack }, "戻る"),
-            h("button", { type: "button", className: "secondary", onClick: goHome }, "ホームへ"),
-          h("button", { type: "button", className: "secondary", onClick: goHome }, "ホームへ")
-        ),
         h("div", { className: "horse-title horse-profile-title" },
           h("div", null,
             h("h2", null, normalizedName),
@@ -2869,7 +2869,7 @@ export function createKeibaApp(React, icons) {
             h("span", null, `騎手: ${record.jockey || "-"} ${record.carriedWeight || "-"}kg`),
             h("span", null, `タイム: ${record.time || "-"} / 上がり: ${record.last3f || "-"}`),
             h("span", null, `3角: ${record.corner3 || "-"}番手 / 4角: ${record.corner4 || "-"}番手`),
-            h("span", null, `${record.frameNumber || "-"}枠 ${record.horseNumber || "-"}番`)
+            h("span", { className: "record-frame-display" }, h(FrameHorseNumbers, { frame: record.frameNumber, horseNumber: record.horseNumber }))
           ),
           memo && h("div", { className: "record-memo-badge" }, "メモあり")
         )
@@ -2879,7 +2879,7 @@ export function createKeibaApp(React, icons) {
       expanded && h("div", { className: "record-detail" },
         h("dl", null,
           h("dt", null, "全成績情報"),
-          h("dd", null, `${record.finish || "-"}着 / ${record.fieldSize || "-"}頭 / 人気${record.popularity || "-"} / ${record.frameNumber || "-"}枠${record.horseNumber || "-"}番`),
+          h("dd", null, `${record.finish || "-"}着 / ${record.fieldSize || "-"}頭 / 人気${record.popularity || "-"}`),
           h("dt", null, "条件"),
           h("dd", null, `${record.surface || "-"}${record.distance || ""} ${record.going || "-"} / ${record.jockey || "-"} ${record.carriedWeight || "-"}kg`),
           h("dt", null, "タイム"),
