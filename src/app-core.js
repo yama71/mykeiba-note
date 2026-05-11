@@ -395,13 +395,13 @@ function parseRaceEntries(text) {
     });
   });
 
-  if (rows.length > 0) return rows;
+  if (rows.length > 0) return applyJraFrameAssignment(rows);
 
   const legacyRows = lines
     .filter((line) => !/^(枠|枠番|馬番|印|人気|単勝|性齢|馬体重)/.test(line))
     .map(parseLegacyRaceLine)
     .filter(Boolean);
-  return legacyRows.length > 0 ? legacyRows : [makeUnparsedRow(text.trim())];
+  return legacyRows.length > 0 ? applyJraFrameAssignment(legacyRows) : [makeUnparsedRow(text.trim())];
 }
 
 function normalizeRaceTextLine(line) {
@@ -454,7 +454,16 @@ function parseHorseInfoLine(line, pendingNumbers) {
 }
 
 function extractSexAge(line) {
-  return line.match(/[牡牝セ]\d{1,2}/)?.[0] || "";
+  const text = String(line || "").trim();
+  const matched = text.match(/(?:牡|牝|せん|セン|セ|騙)\s*\d{1,2}/) || text.match(/[迚｡迚昴そ]\d{1,2}/);
+  if (matched) {
+    const value = matched[0].replace(/\s+/g, "");
+    const age = value.match(/\d{1,2}/)?.[0] || "";
+    if (/^(セン|セ|騙)/.test(value)) return age ? `せん${age}` : value;
+    return value;
+  }
+  const gelding = text.match(/geld(?:ing)?\s*(\d{1,2})/i);
+  return gelding ? `せん${gelding[1]}` : "";
 }
 
 function extractJockeyWeight(line) {
@@ -466,10 +475,31 @@ function extractJockeyWeight(line) {
   };
 }
 
-function inferFrameNumber(horseNumber) {
+function inferFrameNumber(horseNumber, fieldSize = 16) {
   const number = Number(horseNumber);
+  const total = Number(fieldSize) || number || 16;
   if (!Number.isFinite(number) || number < 1) return "";
-  return Math.min(8, Math.ceil(number / 2));
+  if (total <= 8) return Math.min(8, number);
+  if (total <= 15) {
+    const singleFrameCount = 16 - total;
+    if (number <= singleFrameCount) return number;
+    return Math.min(8, singleFrameCount + Math.ceil((number - singleFrameCount) / 2));
+  }
+  if (total === 16) return Math.min(8, Math.ceil(number / 2));
+  if (total === 17) return number <= 14 ? Math.ceil(number / 2) : 8;
+  return number <= 12 ? Math.ceil(number / 2) : (number <= 15 ? 7 : 8);
+}
+
+function applyJraFrameAssignment(rows) {
+  const safeRows = safeArray(rows);
+  const fieldSize = Math.max(safeRows.length, ...safeRows.map((row) => Number(row.horseNumber || 0)).filter(Number.isFinite), 0);
+  if (!fieldSize) return safeRows;
+  return safeRows.map((row) => {
+    const computedFrame = inferFrameNumber(row.horseNumber, fieldSize);
+    const currentFrame = Number(row.frameNumber || row.frame || 0);
+    const shouldFix = computedFrame && (!currentFrame || currentFrame < 1 || currentFrame > 8 || currentFrame !== computedFrame);
+    return shouldFix ? { ...row, frameNumber: String(computedFrame), frame: String(computedFrame) } : row;
+  });
 }
 
 function parseLegacyRaceLine(line) {
@@ -589,34 +619,40 @@ function parseResultRows(text, raceCard) {
     });
   });
 
-  return rows.length > 0 ? rows : [makeResultRow(text.trim())];
+  return rows.length > 0 ? applyJraFrameAssignment(rows) : [makeResultRow(text.trim())];
 }
 
 function parseRaceResultMeta(text, raceInfo = {}) {
   const rawLines = String(text || "").split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
-  const joined = rawLines.join("\n");
-  const lapMatch = joined.match(/ハロンタイム\s*([0-9.\s\-]+)/);
-  const climbMatch = joined.match(/上り\s*4F\s*([0-9.]+)\s*-\s*3F\s*([0-9.]+)/);
-  const lapTimes = lapMatch ? (lapMatch[1].match(/\d+(?:\.\d+)?/g) || []) : [];
+  const lapLine = rawLines.find((line) => /ハロンタイム|繝上Ο繝ｳ繧ｿ繧､繝/.test(line)) || "";
+  const climbLine = rawLines.find((line) => /上り|上がり|荳翫ｊ/.test(line) && /3F|4F/.test(line)) || "";
+  const lapText = lapLine.replace(/.*?(?:ハロンタイム|繝上Ο繝ｳ繧ｿ繧､繝)/, "");
+  const lapTimes = lapText.match(/\d+(?:\.\d+)?/g) || [];
+  const climbMatch = climbLine.match(/4F\s*([0-9.]+)\s*-\s*3F\s*([0-9.]+)/) || climbLine.match(/3F\s*([0-9.]+).*4F\s*([0-9.]+)/);
   const cornerPassages = {};
 
   [1, 2, 3, 4].forEach((corner) => {
-    const labelPattern = new RegExp(`^${corner}\\s*コーナー`);
-    const index = rawLines.findIndex((line) => labelPattern.test(line));
+    const properPattern = new RegExp("^" + corner + "\\s*コーナー");
+    const legacyPattern = new RegExp("^" + corner + "\\s*繧ｳ繝ｼ繝翫・");
+    const index = rawLines.findIndex((line) => properPattern.test(line) || legacyPattern.test(line));
     if (index < 0) return;
-    const sameLine = rawLines[index].replace(labelPattern, "").trim();
+    const sameLine = rawLines[index].replace(properPattern, "").replace(legacyPattern, "").trim();
     const passage = sameLine || rawLines[index + 1] || "";
     if (passage) cornerPassages[String(corner)] = passage;
   });
 
   const half = calculateHalfTimes(lapTimes, raceInfo.distance);
+  const firstFurlong = calculateFirstFurlongBase(lapTimes, raceInfo.distance);
   return {
     lapTimes,
-    last4F: climbMatch?.[1] || "",
-    last3F: climbMatch?.[2] || "",
+    last4F: climbMatch ? (climbLine.includes("3F") && climbLine.indexOf("3F") < climbLine.indexOf("4F") ? climbMatch[2] : climbMatch[1]) : "",
+    last3F: climbMatch ? (climbLine.includes("3F") && climbLine.indexOf("3F") < climbLine.indexOf("4F") ? climbMatch[1] : climbMatch[2]) : "",
     firstHalfTime: half.firstHalfTime,
     secondHalfTime: half.secondHalfTime,
     halfDiff: half.halfDiff,
+    firstFurlongBase: firstFurlong,
+    firstFurlongCorner: firstExistingCorner(cornerPassages),
+    firstFurlongTopHorseNumbers: extractHorseNumbersInOrder(cornerPassages[firstExistingCorner(cornerPassages)] || "").slice(0, 5),
     cornerPassages,
   };
 }
@@ -624,25 +660,63 @@ function parseRaceResultMeta(text, raceInfo = {}) {
 function calculateHalfTimes(lapTimes, distance) {
   const laps = safeArray(lapTimes).map((value) => Number(value)).filter((value) => Number.isFinite(value));
   if (laps.length === 0) return { firstHalfTime: "", secondHalfTime: "", halfDiff: "" };
+  const numericDistance = Number(String(distance || "").replace(/[^\d.]/g, ""));
+  const hasFirst100m = isFirst100mDistance(numericDistance) && laps.length > 1;
+  const segments = laps.map((lap, index) => ({ time: lap, distance: hasFirst100m && index === 0 ? 100 : 200 }));
+  const totalDistance = numericDistance > 0 ? numericDistance : segments.reduce((sum, segment) => sum + segment.distance, 0);
+  const halfDistance = totalDistance / 2;
+  let covered = 0;
   let first = 0;
   let second = 0;
-  if (laps.length % 2 === 0) {
-    const halfIndex = laps.length / 2;
-    first = laps.slice(0, halfIndex).reduce((sum, lap) => sum + lap, 0);
-    second = laps.slice(halfIndex).reduce((sum, lap) => sum + lap, 0);
-  } else {
-    const centerIndex = Math.floor(laps.length / 2);
-    first = laps.slice(0, centerIndex).reduce((sum, lap) => sum + lap, 0) + laps[centerIndex] / 2;
-    second = laps[centerIndex] / 2 + laps.slice(centerIndex + 1).reduce((sum, lap) => sum + lap, 0);
-  }
+
+  segments.forEach((segment) => {
+    const start = covered;
+    const end = covered + segment.distance;
+    const firstDistance = Math.max(0, Math.min(end, halfDistance) - start);
+    const secondDistance = Math.max(0, end - Math.max(start, halfDistance));
+    first += segment.time * (firstDistance / segment.distance);
+    second += segment.time * (secondDistance / segment.distance);
+    covered = end;
+  });
 
   if (first === 0 || second === 0) return { firstHalfTime: "", secondHalfTime: "", halfDiff: "" };
   const diff = second - first;
   return {
     firstHalfTime: first.toFixed(1),
     secondHalfTime: second.toFixed(1),
-    halfDiff: `${diff >= 0 ? "+" : ""}${diff.toFixed(1)}`,
+    halfDiff: (diff >= 0 ? "+" : "") + diff.toFixed(1),
   };
+}
+
+function isFirst100mDistance(distance) {
+  const numeric = Number(distance);
+  return Number.isFinite(numeric) && numeric > 0 && numeric % 200 === 100;
+}
+
+function calculateFirstFurlongBase(lapTimes, distance) {
+  const laps = safeArray(lapTimes).map((value) => Number(value)).filter((value) => Number.isFinite(value));
+  if (laps.length === 0) return "";
+  const numericDistance = Number(String(distance || "").replace(/[^\d.]/g, ""));
+  const base = isFirst100mDistance(numericDistance) && laps.length > 1 ? laps[0] + laps[1] / 2 : laps[0];
+  return Number.isFinite(base) ? base.toFixed(1) : "";
+}
+
+function firstExistingCorner(cornerPassages = {}) {
+  return ["1", "2", "3", "4"].find((corner) => String(cornerPassages[corner] || "").trim()) || "";
+}
+
+function extractHorseNumbersInOrder(passage) {
+  return String(passage || "").match(/\d{1,2}/g) || [];
+}
+
+function buildFirstFurlongMap(meta = {}) {
+  const base = Number(meta.firstFurlongBase);
+  if (!Number.isFinite(base)) return {};
+  const topNumbers = safeArray(meta.firstFurlongTopHorseNumbers).slice(0, 5);
+  return topNumbers.reduce((map, horseNumber, index) => {
+    map[String(horseNumber)] = (base + index * 0.1).toFixed(1);
+    return map;
+  }, {});
 }
 
 function parseResultHorseLine(line) {
@@ -778,10 +852,15 @@ function judgeTrackTrend(winningTime, averageWinningTime) {
 }
 
 function buildRaceResult(rows, averageWinningTime, sourceText = "", raceInfo = {}) {
-  const safeRows = safeArray(rows).map(sanitizeResultRow);
+  const meta = parseRaceResultMeta(sourceText, raceInfo);
+  const firstFurlongMap = buildFirstFurlongMap(meta);
+  const safeRows = safeArray(rows).map(sanitizeResultRow).map((row) => ({
+    ...row,
+    frameNumber: row.frameNumber || String(inferFrameNumber(row.horseNumber, safeArray(rows).length)),
+    firstFurlongEstimate: firstFurlongMap[String(row.horseNumber || "")] || row.firstFurlongEstimate || "-",
+  }));
   const sortedRows = [...safeRows].sort((a, b) => Number(a.finish || 999) - Number(b.finish || 999));
   const winningTime = sortedRows[0]?.time || "";
-  const meta = parseRaceResultMeta(sourceText, raceInfo);
   return {
     status: "result_registered",
     rows: safeRows,
@@ -793,6 +872,9 @@ function buildRaceResult(rows, averageWinningTime, sourceText = "", raceInfo = {
     firstHalfTime: meta.firstHalfTime,
     secondHalfTime: meta.secondHalfTime,
     halfDiff: meta.halfDiff,
+    firstFurlongBase: meta.firstFurlongBase,
+    firstFurlongCorner: meta.firstFurlongCorner,
+    firstFurlongTopHorseNumbers: meta.firstFurlongTopHorseNumbers,
     cornerPassages: meta.cornerPassages,
     averageWinningTime: averageWinningTime || "",
     winningTime,
@@ -883,7 +965,7 @@ function sanitizeResultRow(row = {}) {
   return {
     id: row.id || makeId("result-row"),
     finish: String(row.finish || ""),
-    frameNumber: String(row.frameNumber || ""),
+    frameNumber: String(row.frameNumber || row.frame || ""),
     horseNumber: String(row.horseNumber || ""),
     horseName: String(row.horseName || ""),
     sexAge: String(row.sexAge || ""),
@@ -895,13 +977,14 @@ function sanitizeResultRow(row = {}) {
     last3f: String(row.last3f || ""),
     corner3: String(row.corner3 || ""),
     corner4: String(row.corner4 || row.position || ""),
+    firstFurlongEstimate: String(row.firstFurlongEstimate || "-"),
   };
 }
 
 function sanitizeRaceCard(race = {}) {
   const infoSource = { ...(race.raceInfo || {}), ...race };
   const raceInfo = sanitizeRaceInfo(infoSource);
-  const entries = safeArray(race.entries).map(sanitizeRaceEntry);
+  const entries = applyJraFrameAssignment(safeArray(race.entries).map(sanitizeRaceEntry));
   if (!raceInfo.raceName) raceInfo.raceName = "名称未設定";
   if (!raceInfo.raceNumber) raceInfo.raceNumber = "未設定";
   if (!raceInfo.track) raceInfo.track = "未設定";
@@ -1247,6 +1330,7 @@ function buildHorseRecord(race, row) {
     last3f: row.last3f || "",
     corner3: row.corner3 || "",
     corner4: row.corner4 || "",
+    firstFurlongEstimate: row.firstFurlongEstimate || "-",
     averageWinningTime: race.result?.averageWinningTime || "",
     averageTimeDiff: toSeconds(row.time || "") != null && toSeconds(race.result?.averageWinningTime || "") != null
       ? (toSeconds(row.time || "") - toSeconds(race.result?.averageWinningTime || "")).toFixed(1)
@@ -1300,6 +1384,7 @@ function resultRowsFromRace(race, horseRecords = []) {
       last3f: record.last3f,
       corner3: record.corner3,
       corner4: record.corner4,
+      firstFurlongEstimate: record.firstFurlongEstimate || "-",
       parsed: true,
     }));
 }
@@ -2500,7 +2585,7 @@ export function createKeibaApp(React, icons) {
             top3.length ? renderResultList(top3, true) : h("p", null, "表示できる結果データがありません。")
           ),
           h(RaceLapPanel, { result: resultMeta }),
-          h(CornerPassagePanel, { cornerPassages: resultMeta.cornerPassages }),
+          h(CornerPassagePanel, { result: resultMeta }),
           h("div", { className: "race-detail-actions" },
             h("button", { type: "button", className: "secondary", onClick: () => setShowAllResults((current) => !current) }, showAllResults ? "全着順を閉じる" : "全着順を見る"),
             h("button", { type: "button", className: "secondary", onClick: () => setShowEntries((current) => !current) }, showEntries ? "出走表を閉じる" : "出走表を見る"),
@@ -2528,7 +2613,7 @@ export function createKeibaApp(React, icons) {
       h("div", { className: "result-horse-body" },
         h("div", { className: "horse-line-title" }, h(FrameHorseNumbers, { frame: safeRow.frameNumber, horseNumber: safeRow.horseNumber }), h("h4", null, safeRow.horseName || "馬名未入力")),
         h("p", null, [safeRow.sexAge, `${safeRow.jockey || "騎手未入力"} ${safeRow.carriedWeight || "-"}`, safeRow.popularity ? `人気${safeRow.popularity}` : ""].filter(Boolean).join(" / ")),
-        h("p", null, [safeRow.time || "タイム未入力", safeRow.margin ? `着差${safeRow.margin}` : "", safeRow.last3f ? `上がり${safeRow.last3f}` : ""].filter(Boolean).join(" / ")),
+        h("p", null, [safeRow.time || "タイム未入力", safeRow.margin ? `着差${safeRow.margin}` : "", safeRow.last3f ? `上がり${safeRow.last3f}` : "", `テン1F:${safeRow.firstFurlongEstimate || "-"}`].filter(Boolean).join(" / ")),
         h("p", { className: "corner-line" }, [`3角${safeRow.corner3 || "-"}番手`, `4角${safeRow.corner4 || "-"}番手`].join(" / "))
       )
     );
@@ -2536,32 +2621,62 @@ export function createKeibaApp(React, icons) {
 
   function RaceLapPanel({ result }) {
     const laps = safeArray(result?.lapTimes).filter(Boolean);
-    const hasLapInfo = laps.length > 0 || result?.last4F || result?.last3F;
+    const hasLapInfo = laps.length > 0 || result?.last4F || result?.last3F || result?.firstFurlongBase;
     if (!hasLapInfo) return null;
     return h("section", { className: "race-detail-panel race-lap-panel" },
       h("h3", null, "レースラップ"),
       laps.length > 0 && h("p", { className: "lap-line" }, laps.join(" - ")),
       h("div", { className: "lap-summary-grid" },
+        h("span", null, h("small", null, "テン1F"), h("strong", null, result.firstFurlongBase || "-")),
+        h("span", null, h("small", null, "使用通過順位"), h("strong", null, result.firstFurlongCorner ? `${result.firstFurlongCorner}コーナー` : "-")),
         h("span", null, h("small", null, "前半"), h("strong", null, result.firstHalfTime || "計算不可")),
         h("span", null, h("small", null, "後半"), h("strong", null, result.secondHalfTime || "計算不可")),
         h("span", null, h("small", null, "前後半差"), h("strong", null, result.halfDiff || "計算不可")),
         h("span", null, h("small", null, "上り4F"), h("strong", null, result.last4F || "-")),
         h("span", null, h("small", null, "上り3F"), h("strong", null, result.last3F || "-"))
-      )
+      ),
+      safeArray(result.firstFurlongTopHorseNumbers).length > 0 && h("p", { className: "lap-note" }, `テン1F上位5頭: ${safeArray(result.firstFurlongTopHorseNumbers).join(", ")}`)
     );
   }
 
-  function CornerPassagePanel({ cornerPassages }) {
-    const passages = cornerPassages || {};
+  function CornerPassagePanel({ result }) {
+    const passages = result?.cornerPassages || {};
     const corners = ["1", "2", "3", "4"].filter((corner) => String(passages[corner] || "").trim());
     if (corners.length === 0) return null;
+    const highlightMap = buildCornerHighlightMap(result);
     return h("section", { className: "race-detail-panel corner-passage-panel" },
       h("h3", null, "コーナー通過順位"),
       corners.map((corner) => h("div", { key: corner, className: "corner-passage-row" },
         h("strong", null, `${corner}コーナー`),
-        h("p", null, passages[corner])
+        h("p", null, renderCornerPassageTokens(passages[corner], highlightMap))
       ))
     );
+  }
+
+  function buildCornerHighlightMap(result) {
+    return sortResultRows(resultRowsFromResult(result)).slice(0, 3).reduce((map, row) => {
+      if (!row.horseNumber) return map;
+      map[String(row.horseNumber)] = row.frameNumber || inferFrameNumber(row.horseNumber, safeArray(result?.fullResults || result?.rows).length);
+      return map;
+    }, {});
+  }
+
+  function resultRowsFromResult(result) {
+    const firstFurlongMap = buildFirstFurlongMap(result || {});
+    return safeArray(result?.fullResults || result?.rows || result?.top3)
+      .map(sanitizeResultRow)
+      .map((row) => ({
+        ...row,
+        firstFurlongEstimate: row.firstFurlongEstimate && row.firstFurlongEstimate !== "-" ? row.firstFurlongEstimate : firstFurlongMap[String(row.horseNumber || "")] || "-",
+      }));
+  }
+
+  function renderCornerPassageTokens(passage, highlightMap) {
+    return String(passage || "").split(/(\d{1,2})/g).filter((token) => token !== "").map((token, index) => {
+      if (!/^\d{1,2}$/.test(token) || !highlightMap[token]) return h("span", { key: `${token}-${index}` }, token);
+      const frame = Number(highlightMap[token]);
+      return h("span", { key: `${token}-${index}`, className: `corner-horse-chip frame-box frame-${frame}` }, token);
+    });
   }
 
   function FrameHorseNumbers({ frame, horseNumber }) {
@@ -2754,7 +2869,7 @@ export function createKeibaApp(React, icons) {
       ),
       h("p", null, `${info.track || "競馬場未入力"} ${raceNumberLabel(info.raceNumber) || "レース番号未入力"} ${info.raceName || "レース名未入力"}`),
       resultMeta && h(RaceLapPanel, { result: resultMeta }),
-      resultMeta && h(CornerPassagePanel, { cornerPassages: resultMeta.cornerPassages }),
+      resultMeta && h(CornerPassagePanel, { result: resultMeta }),
       h("pre", null, JSON.stringify(summary, null, 2))
     );
   }
@@ -3133,7 +3248,7 @@ export function createKeibaApp(React, icons) {
           h("div", { className: "record-facts" },
             h("span", null, `${record.finish || "-"}着 / ${record.fieldSize || "-"}頭 / 人気${record.popularity || "-"}`),
             h("span", null, `騎手: ${record.jockey || "-"} ${record.carriedWeight || "-"}kg`),
-            h("span", null, `タイム: ${record.time || "-"} / 上がり ${record.last3f || "-"}`),
+            h("span", null, `タイム: ${record.time || "-"} / 上がり ${record.last3f || "-"} / テン1F ${record.firstFurlongEstimate || "-"}`),
             h("span", null, `3角 ${record.corner3 || "-"}番手 / 4角 ${record.corner4 || "-"}番手`),
             h("span", { className: "record-frame-display" }, h(FrameHorseNumbers, { frame: record.frameNumber, horseNumber: record.horseNumber }))
           ),
@@ -3150,7 +3265,7 @@ export function createKeibaApp(React, icons) {
           h("dt", null, "条件"),
           h("dd", null, `${record.surface || "-"}${record.distance || ""} ${record.going || "-"} / ${record.jockey || "-"} ${record.carriedWeight || "-"}kg`),
           h("dt", null, "タイム"),
-          h("dd", null, `${record.time || "-"} / 着差 ${record.margin || "なし"} / 上がり${record.last3f || "-"}`),
+          h("dd", null, `${record.time || "-"} / 着差 ${record.margin || "なし"} / 上がり${record.last3f || "-"} / テン1F ${record.firstFurlongEstimate || "-"}`),
           h("dt", null, "通過"),
           h("dd", null, `3角${record.corner3 || "-"}番手 / 4角${record.corner4 || "-"}番手`)
         ),
