@@ -308,6 +308,25 @@ button {
   line-height: 1.25;
 }
 
+.home-link-button {
+  margin-left: auto;
+  flex: 0 0 auto;
+  min-height: 40px;
+  border: 1px solid #ded6c8;
+  border-radius: 8px;
+  padding: 0 10px;
+  color: #3f382d;
+  background: #fffdf8;
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.page-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
 .card-stack {
   display: grid;
   gap: 12px;
@@ -1614,6 +1633,105 @@ textarea:focus {
 
 .result-horse-body .corner-line {
   color: #3c372e;
+}
+
+.horse-note-section,
+.horse-note-form,
+.horse-note-card {
+  display: grid;
+  gap: 12px;
+}
+
+.horse-note-form,
+.horse-note-card {
+  padding: 14px;
+  border: 1px solid #ded6c8;
+  border-radius: 8px;
+  background: #fffdf8;
+}
+
+.section-headline {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.section-headline h3 {
+  margin: 0;
+  font-size: 17px;
+}
+
+.custom-tag-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 8px;
+}
+
+.custom-tag-row input {
+  min-height: 44px;
+  border: 1px solid #d7d0c4;
+  border-radius: 8px;
+  padding: 0 12px;
+  font: inherit;
+}
+
+.rating-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 8px;
+}
+
+.rating-grid button {
+  min-height: 44px;
+  border: 1px solid #d7d0c4;
+  border-radius: 8px;
+  color: #4d463a;
+  background: #fff;
+  font-weight: 900;
+}
+
+.rating-grid button.selected {
+  border-color: #1f6a5d;
+  color: #fff;
+  background: #1f6a5d;
+}
+
+.horse-note-list {
+  display: grid;
+  gap: 10px;
+}
+
+.horse-note-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.horse-note-head strong {
+  line-height: 1.35;
+}
+
+.next-run-note {
+  margin: 0;
+  color: #2f6b4f;
+  font-size: 13px;
+  font-weight: 900;
+}
+
+.text-button {
+  width: fit-content;
+  min-height: 36px;
+  border: 0;
+  padding: 0;
+  color: #1f6a5d;
+  background: transparent;
+  font-weight: 900;
+}
+
+.record-actions {
+  padding: 0 12px 10px;
 }
 
 .error-text {

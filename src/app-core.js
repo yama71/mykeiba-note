@@ -35,8 +35,8 @@ const attentionOptions = [
   { value: "B", label: "B", help: "条件次第で買いたい" },
   { value: "C", label: "C", help: "メモとして残す" },
 ];
-const troubleTags = ["出遅れ", "前壁", "包まれた", "進路狭い", "外々", "早仕掛け", "脚余し", "掛かる", "直線不利", "距離ロス"];
-const strongTags = ["ハイペース先行粘り", "先行有利で差し", "差し有利で先行", "上がり優秀", "着順以上", "次走買い"];
+const troubleTags = ["出遅れ", "前壁", "詰まり", "進路なし", "外回し", "内で包まれる", "砂被り嫌う", "馬場不向き", "距離不向き", "展開不向き", "ペース不向き", "位置取り悪い", "折り合い欠く", "掛かる", "直線不利", "4角不利", "包まれた", "進路狭い", "外々", "早仕掛け", "脚余し", "距離ロス"];
+const strongTags = ["着順以上", "次走注目", "巻き返し候補", "距離短縮で狙い", "距離延長で狙い", "ダート替わりで狙い", "芝替わりで狙い", "良馬場で見直し", "道悪で見直し", "先行有利", "差し有利", "ハイペース向き", "スローペース向き", "ハイペース先行粘り", "先行有利で差し", "差し有利で先行", "上がり優秀", "次走買い"];
 const buyTags = ["同距離", "距離短縮", "距離延長", "良馬場", "道悪", "東京向き", "中山向き", "外枠希望", "内枠希望", "人気落ちなら", "展開向けば"];
 const attentionScores = { A: 5, B: 3, C: 1 };
 const scoreTagRules = {
@@ -266,6 +266,7 @@ function buildBackup(memos, raceCards, horseRecords, averageTimes) {
     exportedAt: new Date().toISOString(),
     data: {
       memos,
+      horseNotes: memos,
       raceCards: safeArray(raceCards).map(toStorageRaceCard),
       horseRecords,
       averageTimes,
@@ -277,7 +278,7 @@ function parseBackup(text) {
   const parsed = JSON.parse(text);
   const data = parsed.data || parsed;
   return {
-    memos: Array.isArray(data.memos) ? data.memos : [],
+    memos: Array.isArray(data.horseNotes) ? data.horseNotes : (Array.isArray(data.memos) ? data.memos : []),
     raceCards: Array.isArray(data.raceCards) ? data.raceCards : [],
     horseRecords: Array.isArray(data.horseRecords) ? data.horseRecords : [],
     averageTimes: Array.isArray(data.averageTimes) ? data.averageTimes : [],
@@ -1460,6 +1461,7 @@ export function createKeibaApp(React, icons) {
     const [averageTimes, setAverageTimes] = useState(() => mergeAverageTimes(loadJson(AVERAGE_TIMES_STORAGE_KEY), defaultAverageTimes));
     const [selectedHorse, setSelectedHorse] = useState("");
     const [selectedRaceId, setSelectedRaceId] = useState("");
+    const [navigationHistory, setNavigationHistory] = useState([]);
     const [toast, setToast] = useState("");
 
     useEffect(() => saveJson(MEMO_STORAGE_KEY, memos), [memos]);
@@ -1514,11 +1516,63 @@ export function createKeibaApp(React, icons) {
       setTimeout(() => setToast(""), 1800);
     }
 
+    function navigate(nextScreen) {
+      setNavigationHistory((current) => screen === nextScreen ? current : [...current, screen].slice(-20));
+      setScreen(nextScreen);
+    }
+
+    function goBack() {
+      setNavigationHistory((current) => {
+        const previous = current[current.length - 1] || "home";
+        setScreen(previous);
+        return current.slice(0, -1);
+      });
+    }
+
+    function goHome() {
+      setNavigationHistory([]);
+      setScreen("home");
+    }
+
     function addMemo(memo) {
       const nextMemo = { ...memo, id: crypto.randomUUID(), createdAt: new Date().toISOString() };
       setMemos((current) => [nextMemo, ...current]);
       notify("保存しました");
-      setScreen("list");
+      navigate("list");
+    }
+
+    function saveHorseNote(note) {
+      const now = new Date().toISOString();
+      const normalized = {
+        ...note,
+        id: note.id || crypto.randomUUID(),
+        horseName: normalizeHorseName(note.horseName),
+        raceId: note.raceId || null,
+        raceDate: note.date || note.raceDate || "",
+        track: note.racecourse || note.track || "",
+        raceNumber: note.raceNumber || "",
+        raceName: note.raceName || "",
+        attention: note.rating && note.rating !== "保留" ? note.rating : "C",
+        tags: safeArray(note.tags),
+        troubleTags: safeArray(note.troubleTags || note.tags),
+        strongTags: safeArray(note.strongTags),
+        buyTags: safeArray(note.buyTags),
+        rating: note.rating || "保留",
+        nextRunNote: note.nextRunNote || "",
+        memo: note.memo || "",
+        createdAt: note.createdAt || now,
+        updatedAt: now,
+      };
+      if (!normalized.horseName) return;
+      setMemos((current) => [normalized, ...safeArray(current).filter((memo) => memo.id !== normalized.id)]);
+      notify("回顧メモを保存しました");
+    }
+
+    function deleteHorseNote(id) {
+      const confirmed = window.confirm("この回顧メモを削除します。よろしいですか？");
+      if (!confirmed) return;
+      setMemos((current) => safeArray(current).filter((memo) => memo.id !== id));
+      notify("回顧メモを削除しました");
     }
 
     function addRaceCard(raceCard) {
@@ -1632,48 +1686,48 @@ export function createKeibaApp(React, icons) {
       persistRaceCardsToStorage(nextCards);
       setRaceCards(nextCards);
       notify("レース結果を保存しました");
-      setScreen("home");
+      navigate("race");
     }
 
     function openResultImport(raceId) {
       setSelectedRaceId(raceId);
-      setScreen("result");
+      navigate("result");
     }
 
     function openRaceDetail(raceId) {
       setSelectedRaceId(raceId);
-      setScreen("race");
+      navigate("race");
     }
 
     function openHorse(horseName) {
       setSelectedHorse(normalizeHorseName(horseName));
-      setScreen("horse");
+      navigate("horse");
     }
 
     return h(AppErrorBoundary, null,
       h("div", { className: "app-shell" },
-        h(Header, { screen, setScreen }),
+        h(Header, { screen, goBack, goHome }),
         h("main", null,
-          screen === "home" && h(Home, { raceCards, horseRecords, setScreen, openRaceDetail, safeHomeMode }),
-          screen === "add" && h(AddMemo, { onSave: addMemo, onCancel: () => setScreen("home") }),
+          screen === "home" && h(Home, { raceCards, horseRecords, setScreen: navigate, openRaceDetail, safeHomeMode }),
+          screen === "add" && h(AddMemo, { onSave: addMemo, onCancel: goBack }),
           screen === "import" && h(RaceImport, { onSave: addRaceCard }),
           screen === "result" && h(ResultImport, { raceCards, horseRecords, selectedRaceId, averageTimes, onSave: saveRaceResult, openHorse }),
-        screen === "race" && h(RaceDetail, { raceCards, selectedRaceId, averageTimes, horseRecords, openHorse, openResultImport, setScreen }),
+        screen === "race" && h(RaceDetail, { raceCards, selectedRaceId, averageTimes, horseRecords, openHorse, openResultImport, setScreen: navigate, goBack, goHome }),
         screen === "races" && h(RegisteredRaceList, { raceCards, openRaceDetail }),
         screen === "average" && h(AverageTimesScreen, { averageTimes }),
-        screen === "diagnostic" && h(DataDiagnosticScreen, { setScreen }),
-        screen === "backup" && h(BackupScreen, { memos, raceCards, horseRecords, averageTimes, setMemos, setRaceCards, setHorseRecords, setAverageTimes, notify, setScreen, deleteEntryOnlyHorseRecords }),
-          screen === "list" && h(HorseList, { horseStats, horseRecords, openHorse, setScreen, deleteHorseRecordsForRace }),
+        screen === "diagnostic" && h(DataDiagnosticScreen, { setScreen: navigate }),
+        screen === "backup" && h(BackupScreen, { memos, raceCards, horseRecords, averageTimes, setMemos, setRaceCards, setHorseRecords, setAverageTimes, notify, setScreen: navigate, deleteEntryOnlyHorseRecords }),
+          screen === "list" && h(HorseList, { horseStats, horseRecords, openHorse, setScreen: navigate, goHome, deleteHorseRecordsForRace }),
           screen === "search" && h(HorseSearch, { horseStats, openHorse }),
-          screen === "horse" && h(HorsePage, { horseName: selectedHorse, memos, horseRecords, deleteMemo, setScreen, deleteHorseRecordsForHorse, deleteHorseMemosForHorse })
+          screen === "horse" && h(HorsePage, { horseName: selectedHorse, memos, horseRecords, saveHorseNote, deleteHorseNote, deleteMemo, setScreen: navigate, goBack, goHome, deleteHorseRecordsForHorse, deleteHorseMemosForHorse })
         ),
-        h(BottomNav, { screen, setScreen }),
+        h(BottomNav, { screen, setScreen: navigate }),
         toast && h("div", { className: "toast" }, toast)
       ),
     );
   }
 
-  function Header({ screen, setScreen }) {
+  function Header({ screen, goBack, goHome }) {
     const titles = {
       home: "MyKeiba Note",
       add: "回顧メモ追加",
@@ -1690,9 +1744,10 @@ export function createKeibaApp(React, icons) {
     };
     return h("header", { className: "topbar" },
       screen !== "home"
-        ? h("button", { className: "icon-button", onClick: () => setScreen("home"), "aria-label": "ホームへ戻る" }, h(ChevronLeft, { size: 22 }))
+        ? h("button", { className: "icon-button", onClick: goBack, "aria-label": "戻る" }, h(ChevronLeft, { size: 22 }))
         : h("div", { className: "brand-mark" }, h(Trophy, { size: 20 })),
-      h("div", null, h("p", { className: "eyebrow" }, "自分専用"), h("h1", null, titles[screen]))
+      h("div", null, h("p", { className: "eyebrow" }, "自分用"), h("h1", null, titles[screen])),
+      screen !== "home" && h("button", { type: "button", className: "home-link-button", onClick: goHome }, "ホームへ")
     );
   }
 
@@ -2169,7 +2224,7 @@ export function createKeibaApp(React, icons) {
     );
   }
 
-  function RaceDetail({ raceCards, selectedRaceId, averageTimes, horseRecords = [], openHorse, openResultImport, setScreen }) {
+  function RaceDetail({ raceCards, selectedRaceId, averageTimes, horseRecords = [], openHorse, openResultImport, setScreen, goBack, goHome }) {
     const [showAllResults, setShowAllResults] = useState(false);
     const [showEntries, setShowEntries] = useState(false);
     const storedRaceCards = getAllRaceCards();
@@ -2623,43 +2678,90 @@ export function createKeibaApp(React, icons) {
     );
   }
 
-  function HorsePage({ horseName, memos, horseRecords, deleteMemo, setScreen, deleteHorseRecordsForHorse, deleteHorseMemosForHorse }) {
-    const [tab, setTab] = useState("records");
+  function HorsePage({ horseName, memos, horseRecords, saveHorseNote, deleteHorseNote, deleteMemo, setScreen, goBack, goHome, deleteHorseRecordsForHorse, deleteHorseMemosForHorse }) {
+    const [tab, setTab] = useState("memos");
     const [openRecordId, setOpenRecordId] = useState("");
+    const [editingNote, setEditingNote] = useState(null);
+    const [expandedMemoId, setExpandedMemoId] = useState("");
     const normalizedName = horseName.trim();
-    const history = safeArray(memos).filter((memo) => normalizeHorseName(memo?.horseName) === normalizedName).sort((a, b) => new Date(b.raceDate) - new Date(a.raceDate));
+    const history = safeArray(memos)
+      .filter((memo) => normalizeHorseName(memo?.horseName) === normalizedName)
+      .sort((a, b) => new Date(b.updatedAt || b.createdAt || b.raceDate || 0) - new Date(a.updatedAt || a.createdAt || a.raceDate || 0));
     const records = safeArray(horseRecords)
       .filter((record) => normalizeHorseName(record.horseName) === normalizedName)
       .sort((a, b) => new Date(b.raceDate) - new Date(a.raceDate));
     const latestMemo = history[0];
     const sexAge = records.find((record) => record.sexAge)?.sexAge || "";
-    const bestFinish = records
-      .map((record) => Number(record.finish))
-      .filter((finish) => Number.isFinite(finish))
-      .sort((a, b) => a - b)[0];
+    const bestFinish = records.map((record) => Number(record.finish)).filter((finish) => Number.isFinite(finish)).sort((a, b) => a - b)[0];
     const recentFinishes = records.slice(0, 5).map((record) => `${record.finish || "-"}着`).join(" / ");
     const memoCountForRecords = records.filter((record) => findMemoForRecord(history, record)).length;
+
+    function makeDraft(seed = {}) {
+      const existingTags = [...safeArray(seed.tags), ...safeArray(seed.troubleTags), ...safeArray(seed.strongTags), ...safeArray(seed.buyTags)];
+      return {
+        id: seed.id || "",
+        horseName: normalizedName,
+        raceId: seed.raceId || null,
+        date: seed.date || seed.raceDate || "",
+        racecourse: seed.racecourse || seed.track || "",
+        raceNumber: seed.raceNumber || "",
+        raceName: seed.raceName || "",
+        memo: seed.memo || "",
+        tags: [...new Set(existingTags)].filter(Boolean),
+        rating: seed.rating || seed.attention || "保留",
+        nextRunNote: seed.nextRunNote || "",
+        createdAt: seed.createdAt || "",
+      };
+    }
+
+    function startMemo(seed = {}) {
+      setEditingNote(makeDraft(seed));
+      setTab("memos");
+    }
+
+    function startMemoFromRecord(record) {
+      startMemo({
+        raceId: record.raceId || null,
+        raceDate: record.raceDate || "",
+        track: record.track || "",
+        raceNumber: record.raceNumber || "",
+        raceName: record.raceName || "",
+      });
+    }
+
+    function updateDraft(field, value) {
+      setEditingNote((current) => ({ ...(current || makeDraft()), [field]: value }));
+    }
+
+    function submitNote(event) {
+      event.preventDefault();
+      if (!editingNote?.horseName) return;
+      saveHorseNote(editingNote);
+      setEditingNote(null);
+    }
 
     return h("section", { className: "screen horse-page" }, !horseName || (history.length === 0 && records.length === 0)
       ? h(EmptyState, { title: "履歴が見つかりません", text: "注目馬リストか検索から馬を選んでください。", action: h("button", { className: "primary small", onClick: () => setScreen("list") }, "リストへ") })
       : h(React.Fragment, null,
+        h("div", { className: "page-actions" },
+          h("button", { type: "button", className: "secondary", onClick: goBack }, "戻る"),
+            h("button", { type: "button", className: "secondary", onClick: goHome }, "ホームへ"),
+          h("button", { type: "button", className: "secondary", onClick: goHome }, "ホームへ")
+        ),
         h("div", { className: "horse-title horse-profile-title" },
           h("div", null,
             h("h2", null, normalizedName),
-            h("p", null, [sexAge, latestMemo ? `最新注目度 ${latestMemo.attention}` : ""].filter(Boolean).join("・") || "成績履歴")
+            h("p", null, [sexAge, latestMemo ? `最新評価 ${latestMemo.rating || latestMemo.attention || "-"}` : ""].filter(Boolean).join(" / ") || "競走成績")
           ),
-          latestMemo && h("div", { className: `rank rank-${latestMemo.attention}` }, latestMemo.attention)
+          latestMemo && h("div", { className: `rank rank-${latestMemo.attention || latestMemo.rating || "C"}` }, latestMemo.rating || latestMemo.attention || "-")
         ),
         h("div", { className: "horse-summary-grid" },
           h(Metric, { label: "成績数", value: records.length }),
           h(Metric, { label: "最高着順", value: bestFinish ? `${bestFinish}着` : "-" }),
-          h(Metric, { label: "メモあり", value: memoCountForRecords }),
-          h(Metric, { label: "最新注目度", value: latestMemo?.attention || "-" })
+          h(Metric, { label: "メモあり", value: history.length }),
+          h(Metric, { label: "最新評価", value: latestMemo?.rating || latestMemo?.attention || "-" })
         ),
-        h("div", { className: "recent-finishes" },
-          h("span", null, "直近5走"),
-          h("strong", null, recentFinishes || "-")
-        ),
+        h("div", { className: "recent-finishes" }, h("span", null, "直近5走"), h("strong", null, recentFinishes || "-")),
         h("div", { className: "danger-zone" },
           h("button", { type: "button", className: "danger-button", onClick: () => deleteHorseRecordsForHorse(normalizedName) }, "この馬の成績履歴を削除"),
           h("button", { type: "button", className: "danger-button ghost", onClick: () => deleteHorseMemosForHorse(normalizedName) }, "この馬の回顧メモも削除")
@@ -2668,9 +2770,13 @@ export function createKeibaApp(React, icons) {
           h("button", { type: "button", className: tab === "memos" ? "active" : "", onClick: () => setTab("memos") }, `回顧メモ ${history.length}`),
           h("button", { type: "button", className: tab === "records" ? "active" : "", onClick: () => setTab("records") }, `競走成績 ${records.length}`)
         ),
-        tab === "memos" && (history.length === 0
-          ? h(EmptyState, { title: "回顧メモはまだありません", text: "気になったレースを見返したらメモを追加できます。" })
-          : h("div", { className: "card-stack" }, history.map((memo) => h(MemoCard, { key: memo.id, memo, onDelete: () => deleteMemo(memo.id) })))),
+        tab === "memos" && h("section", { className: "horse-note-section" },
+          h("div", { className: "section-headline" }, h("h3", null, "回顧メモ"), h("button", { type: "button", className: "primary small", onClick: () => startMemo() }, "この馬の回顧メモを書く")),
+          editingNote && h(HorseNoteForm, { draft: editingNote, updateDraft, submitNote, onCancel: () => setEditingNote(null) }),
+          history.length === 0
+            ? h(EmptyState, { title: "回顧メモはまだありません", text: "気になった内容をこの馬のページから残せます。" })
+            : h("div", { className: "horse-note-list" }, history.map((memo) => h(HorseNoteCard, { key: memo.id, memo, expanded: expandedMemoId === memo.id, onToggle: () => setExpandedMemoId((current) => current === memo.id ? "" : memo.id), onEdit: () => startMemo(memo), onDelete: () => deleteHorseNote(memo.id) })))
+        ),
         tab === "records" && (records.length === 0
           ? h(EmptyState, { title: "競走成績はまだありません", text: "結果インポートを保存すると自動でここに並びます。" })
           : h("div", { className: "record-stack" }, records.map((record) => {
@@ -2681,9 +2787,57 @@ export function createKeibaApp(React, icons) {
               memo: linkedMemo,
               expanded: openRecordId === (record.id || recordKey(record)),
               onToggle: () => setOpenRecordId((current) => current === (record.id || recordKey(record)) ? "" : (record.id || recordKey(record))),
+              onWriteMemo: () => startMemoFromRecord(record),
             });
           })))
       ));
+  }
+
+  function HorseNoteForm({ draft, updateDraft, submitNote, onCancel }) {
+    const [customTag, setCustomTag] = useState("");
+    const allTags = [...new Set([...troubleTags, ...strongTags])];
+    function addCustomTag() {
+      const tag = customTag.trim();
+      if (!tag) return;
+      updateDraft("tags", [...new Set([...safeArray(draft.tags), tag])]);
+      setCustomTag("");
+    }
+    return h("form", { className: "horse-note-form", onSubmit: submitNote },
+      h("div", { className: "two-col" },
+        h(Field, { label: "レース日" }, h("input", { type: "date", value: draft.date || "", onChange: (event) => updateDraft("date", event.target.value) })),
+        h(Field, { label: "競馬場" }, h("input", { value: draft.racecourse || "", onChange: (event) => updateDraft("racecourse", event.target.value) }))
+      ),
+      h("div", { className: "two-col" },
+        h(Field, { label: "レース番号" }, h("input", { value: draft.raceNumber || "", onChange: (event) => updateDraft("raceNumber", event.target.value), placeholder: "11R" })),
+        h(Field, { label: "レース名" }, h("input", { value: draft.raceName || "", onChange: (event) => updateDraft("raceName", event.target.value) }))
+      ),
+      h(Field, { label: "メモ本文" }, h("textarea", { value: draft.memo || "", onChange: (event) => updateDraft("memo", event.target.value), rows: 5, placeholder: "見返した内容、次走で気をつけたいこと" })),
+      h(TagPicker, { title: "不利・内容タグ", tags: allTags, selected: safeArray(draft.tags), onChange: (tags) => updateDraft("tags", tags) }),
+      h("div", { className: "custom-tag-row" }, h("input", { value: customTag, onChange: (event) => setCustomTag(event.target.value), placeholder: "自由タグ" }), h("button", { type: "button", className: "secondary", onClick: addCustomTag }, "追加")),
+      h("section", { className: "choice-panel" },
+        h("p", { className: "field-label" }, "評価"),
+        h("div", { className: "rating-grid" }, ["A", "B", "C", "保留"].map((rating) => h("button", { type: "button", key: rating, className: draft.rating === rating ? "selected" : "", onClick: () => updateDraft("rating", rating) }, rating)))
+      ),
+      h(Field, { label: "次走メモ" }, h("textarea", { value: draft.nextRunNote || "", onChange: (event) => updateDraft("nextRunNote", event.target.value), rows: 3, placeholder: "次走で買いたい条件など" })),
+      h("div", { className: "form-actions" }, h("button", { type: "button", className: "secondary", onClick: onCancel }, "キャンセル"), h("button", { className: "primary", disabled: !String(draft.memo || "").trim() }, "保存"))
+    );
+  }
+
+  function HorseNoteCard({ memo, expanded, onToggle, onEdit, onDelete }) {
+    const tags = [...new Set([...safeArray(memo.tags), ...safeArray(memo.troubleTags), ...safeArray(memo.strongTags), ...safeArray(memo.buyTags)])].filter(Boolean);
+    const body = memo.memo || "";
+    const shortBody = body.length > 90 && !expanded ? `${body.slice(0, 90)}...` : body;
+    return h("article", { className: "horse-note-card" },
+      h("div", { className: "horse-note-head" },
+        h("strong", null, [memo.raceDate || memo.date, memo.track || memo.racecourse, raceNumberLabel(memo.raceNumber), memo.raceName].filter(Boolean).join(" ") || "単独メモ"),
+        h("span", { className: `rank mini-rank rank-${memo.rating || memo.attention || "C"}` }, memo.rating || memo.attention || "-")
+      ),
+      tags.length > 0 && h("div", { className: "tag-row compact-tags" }, tags.map((tag) => h("span", { key: tag }, tag))),
+      body && h("p", { className: "memo-text" }, shortBody),
+      body.length > 90 && h("button", { type: "button", className: "text-button", onClick: onToggle }, expanded ? "閉じる" : "全文を見る"),
+      memo.nextRunNote && h("p", { className: "next-run-note" }, `次走メモ：${memo.nextRunNote}`),
+      h("div", { className: "inline-actions" }, h("button", { type: "button", className: "secondary small", onClick: onEdit }, "編集"), h("button", { type: "button", className: "danger-button ghost small", onClick: onDelete }, "削除"))
+    );
   }
 
   function findMemoForRecord(memosForHorse, record) {
@@ -2699,8 +2853,8 @@ export function createKeibaApp(React, icons) {
     ) || null;
   }
 
-  function HorseRecordCard({ record, memo, expanded, onToggle }) {
-    const tags = memo ? [...memo.troubleTags, ...memo.strongTags, ...memo.buyTags] : [];
+  function HorseRecordCard({ record, memo, expanded, onToggle, onWriteMemo }) {
+    const tags = memo ? [...safeArray(memo.tags), ...safeArray(memo.troubleTags), ...safeArray(memo.strongTags), ...safeArray(memo.buyTags)] : [];
     return h("article", { className: `record-card finish-${record.finish === "1" ? "win" : "normal"}` },
       h("button", { type: "button", className: "record-main", onClick: onToggle },
         h("div", { className: "record-rank" },
@@ -2720,6 +2874,7 @@ export function createKeibaApp(React, icons) {
           memo && h("div", { className: "record-memo-badge" }, "メモあり")
         )
       ),
+      h("div", { className: "inline-actions record-actions" }, h("button", { type: "button", className: "secondary small", onClick: onWriteMemo }, "このレースのメモを書く")),
       memo && h("p", { className: "record-memo-summary" }, memo.memo || "このレースの回顧メモがあります。"),
       expanded && h("div", { className: "record-detail" },
         h("dl", null,
