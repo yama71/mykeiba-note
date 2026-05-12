@@ -11,6 +11,7 @@ const FORCE_HOME_STORAGE_KEY = "keiba-force-home-v1";
 const WEEKLY_RACES_COMPAT_KEY = "weeklyRaces";
 const RACE_ENTRIES_COMPAT_KEY = "raceEntries";
 const LAST_RACE_SAVE_DEBUG_KEY = "keiba-last-race-save-debug-v1";
+const REGISTERED_RACE_LIST_ERROR_KEY = "keiba-registered-race-list-error-v1";
 const BACKUP_VERSION = 1;
 const STORAGE_ALIASES = {
   horseNotes: MEMO_STORAGE_KEY,
@@ -1147,6 +1148,203 @@ function getAllRaceCards() {
     console.error("getAllRaceCards failed", error);
     return [];
   }
+}
+
+function safeString(value, fallback = "") {
+  if (typeof value === "string") return value;
+  if (value == null) return fallback;
+  try {
+    return String(value);
+  } catch {
+    return fallback;
+  }
+}
+
+function readStorageArrayFlexible(key) {
+  try {
+    const raw = localStorage.getItem(key);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed)) return parsed;
+    if (parsed && typeof parsed === "object") return Object.values(parsed);
+    return [];
+  } catch (error) {
+    console.warn(`readStorageArrayFlexible failed: ${key}`, error);
+    return [];
+  }
+}
+
+function getDateKeySafe(value) {
+  const raw = safeString(value, "").trim();
+  if (!raw || raw === "日付未設定") return "日付未設定";
+  const matched = raw.match(/(\d{4})[-/](\d{1,2})[-/](\d{1,2})/);
+  if (!matched) return raw || "日付未設定";
+  const [, year, month, day] = matched;
+  return `${year}/${month.padStart(2, "0")}/${day.padStart(2, "0")}`;
+}
+
+function raceCardListKey(card) {
+  return [
+    safeString(card?.raceId || card?.id || ""),
+    safeString(card?.date || card?.raceDate || card?.raceInfo?.raceDate || ""),
+    safeString(card?.racecourse || card?.track || card?.raceInfo?.track || ""),
+    safeString(card?.raceNumber || card?.raceNo || card?.R || card?.raceInfo?.raceNumber || ""),
+  ].join("::");
+}
+
+function isEntryRowLike(item) {
+  return Boolean(item && typeof item === "object" && !Array.isArray(item)
+    && !Array.isArray(item.entries)
+    && (item.horseName || item["馬名"] || item.horseNumber || item.frame || item.frameNumber || item.jockey));
+}
+
+function raceCardsFromEntryRowsSafe(rows) {
+  const groups = new Map();
+  safeArray(rows).forEach((row) => {
+    if (!isEntryRowLike(row)) return;
+    const raceInfo = row.raceInfo || {};
+    const date = safeString(row.date || row.raceDate || raceInfo.raceDate || "");
+    const racecourse = safeString(row.racecourse || row.track || raceInfo.track || "");
+    const raceNumber = normalizeRaceNumber(row.raceNumber || row.raceNo || row.R || raceInfo.raceNumber || "") || safeString(row.raceNumber || "");
+    const raceId = safeString(row.raceId || row.id || buildStableRaceId({ date, racecourse, raceNumber }));
+    const key = raceId || [date, racecourse, raceNumber].join("::");
+    if (!key.trim()) return;
+    const current = groups.get(key) || {
+      id: raceId || key,
+      raceId: raceId || key,
+      date,
+      racecourse,
+      raceNumber,
+      raceName: safeString(row.raceName || raceInfo.raceName || ""),
+      raceClass: safeString(row.raceClass || raceInfo.raceClass || ""),
+      startTime: safeString(row.startTime || row.raceTime || raceInfo.raceTime || ""),
+      surface: safeString(row.surface || raceInfo.surface || ""),
+      distance: safeString(row.distance || raceInfo.distance || ""),
+      going: safeString(row.going || raceInfo.going || ""),
+      entries: [],
+      status: "entry_registered",
+    };
+    current.entries.push(toStorageRaceEntry(row));
+    groups.set(key, current);
+  });
+  return [...groups.values()];
+}
+
+function normalizeRaceCardForList(card) {
+  const raceInfo = card?.raceInfo || {};
+  const date = safeString(card?.date || card?.raceDate || raceInfo.raceDate || "");
+  const dateKey = getDateKeySafe(date);
+  const racecourse = safeString(card?.racecourse || card?.track || raceInfo.track || "競馬場未設定", "競馬場未設定") || "競馬場未設定";
+  const raceNumber = normalizeRaceNumber(card?.raceNumber || card?.raceNo || card?.R || raceInfo.raceNumber || "") || safeString(card?.raceNumber || raceInfo.raceNumber || "R未設定", "R未設定") || "R未設定";
+  const raceName = safeString(card?.raceName || card?.name || raceInfo.raceName || "レース名未設定", "レース名未設定") || "レース名未設定";
+  const raceId = safeString(card?.raceId || card?.id || buildStableRaceId({ date: dateKey === "日付未設定" ? "" : dateKey, racecourse, raceNumber }));
+  const entries = safeArray(card?.entries);
+  const rawResult = card?.result || (safeArray(card?.results).length > 0 ? { rows: card.results } : null);
+  const status = safeString(card?.status || (rawResult ? "result_registered" : "entry_registered"));
+  const winner = rawResult
+    ? sortResultRows(safeArray(rawResult.fullResults || rawResult.rows || rawResult.results).map(sanitizeResultRow))[0]
+    : null;
+  return {
+    raceId,
+    id: raceId,
+    date: date || "日付未設定",
+    dateKey,
+    racecourse,
+    raceNumber,
+    raceName,
+    raceClass: safeString(card?.raceClass || raceInfo.raceClass || ""),
+    startTime: safeString(card?.startTime || card?.raceTime || raceInfo.raceTime || ""),
+    surface: safeString(card?.surface || raceInfo.surface || ""),
+    distance: safeString(card?.distance || raceInfo.distance || ""),
+    entries,
+    entriesCount: entries.length,
+    status,
+    resultStatusLabel: status === "result_registered" || rawResult ? "登録済み" : "未登録",
+    winnerName: safeString(winner?.horseName || ""),
+    winnerTime: safeString(winner?.time || ""),
+    raw: card,
+  };
+}
+
+function getAllRaceCardsSafe() {
+  try {
+    const rawRaceCards = readStorageArrayFlexible(RACE_STORAGE_KEY);
+    const rawWeeklyRaces = readStorageArrayFlexible(WEEKLY_RACES_COMPAT_KEY);
+    const rawRaceEntries = readStorageArrayFlexible(RACE_ENTRIES_COMPAT_KEY);
+    const raceEntryCards = rawRaceEntries.some(isEntryRowLike)
+      ? raceCardsFromEntryRowsSafe(rawRaceEntries)
+      : rawRaceEntries;
+    const map = new Map();
+    [...rawRaceCards, ...rawWeeklyRaces, ...raceEntryCards].forEach((item) => {
+      const normalized = normalizeRaceCardForList(item);
+      const key = normalized.raceId || raceCardListKey(item) || makeId("race-list");
+      const current = map.get(key);
+      if (!current) {
+        map.set(key, normalized);
+        return;
+      }
+      map.set(key, {
+        ...current,
+        ...normalized,
+        entries: normalized.entriesCount > 0 ? normalized.entries : current.entries,
+        entriesCount: Math.max(current.entriesCount || 0, normalized.entriesCount || 0),
+        resultStatusLabel: normalized.resultStatusLabel === "登録済み" ? "登録済み" : current.resultStatusLabel,
+      });
+    });
+    return [...map.values()];
+  } catch (error) {
+    console.error("getAllRaceCardsSafe failed", error);
+    return [];
+  }
+}
+
+function groupRaceCardsForListByDate(cards) {
+  const groups = new Map();
+  safeArray(cards).forEach((card) => {
+    try {
+      const normalized = normalizeRaceCardForList(card.raw || card);
+      const key = normalized.dateKey || "日付未設定";
+      if (!groups.has(key)) groups.set(key, { key, label: key, races: [] });
+      groups.get(key).races.push(normalized);
+    } catch (error) {
+      console.warn("Skipping race card in registered list", error);
+    }
+  });
+  const raceNumberSortValue = (race) => Number(safeString(race.raceNumber).match(/\d+/)?.[0] || 0);
+  return [...groups.values()]
+    .map((group) => ({
+      ...group,
+      races: group.races.sort((a, b) => {
+        if (a.startTime && b.startTime && a.startTime !== b.startTime) return a.startTime.localeCompare(b.startTime);
+        if (a.startTime && !b.startTime) return -1;
+        if (!a.startTime && b.startTime) return 1;
+        return safeString(a.racecourse).localeCompare(safeString(b.racecourse)) || raceNumberSortValue(a) - raceNumberSortValue(b);
+      }),
+    }))
+    .sort((a, b) => {
+      if (a.key === "日付未設定") return 1;
+      if (b.key === "日付未設定") return -1;
+      return safeString(b.key).localeCompare(safeString(a.key));
+    });
+}
+
+function saveRegisteredListError(error, details = {}) {
+  try {
+    localStorage.setItem(REGISTERED_RACE_LIST_ERROR_KEY, JSON.stringify({
+      name: error?.name || "Error",
+      message: error?.message || safeString(error),
+      stack: safeString(error?.stack || "").split("\n").slice(0, 6).join("\n"),
+      details,
+      savedAt: new Date().toISOString(),
+    }));
+  } catch (saveError) {
+    console.warn("saveRegisteredListError failed", saveError);
+  }
+}
+
+function loadRegisteredListError() {
+  const value = safeParseStorage(REGISTERED_RACE_LIST_ERROR_KEY, null);
+  return value && typeof value === "object" ? value : null;
 }
 
 function loadRaceCardsFromStorage() {
@@ -2594,6 +2792,7 @@ export function createKeibaApp(React, icons) {
 
   function DataDiagnosticScreen({ setScreen }) {
     const diagnostics = getDataDiagnostics();
+    const registeredListError = loadRegisteredListError();
     const rows = [
       ["horseRecords", diagnostics.horseRecords],
       ["horseNotes", diagnostics.horseNotes],
@@ -2606,6 +2805,8 @@ export function createKeibaApp(React, icons) {
       ["brokenWeeklyRaces", isolatedBrokenMessage(diagnostics.brokenWeeklyRaces)],
       ["brokenRaceEntries", isolatedBrokenMessage(diagnostics.brokenRaceEntries)],
       ["brokenRaceResults", isolatedBrokenMessage(diagnostics.brokenRaceResults)],
+      ["登録済みレース一覧エラー", registeredListError ? `${registeredListError.name}: ${registeredListError.message}` : "なし"],
+      ["登録済みレース一覧エラー詳細", registeredListError ? `${registeredListError.stack || ""} ${JSON.stringify(registeredListError.details || {})}` : "なし"],
     ];
     return h("section", { className: "screen backup-screen" },
       h("div", { className: "backup-panel" },
@@ -2662,6 +2863,67 @@ export function createKeibaApp(React, icons) {
 
   function RegisteredRaceList({ raceCards, openRaceDetail, setScreen }) {
     const [openDateKey, setOpenDateKey] = useState("");
+    let debugDetails = { safeCount: 0, fallbackCount: safeArray(raceCards).length, displayCount: 0, groupCount: 0 };
+    try {
+      const safeRaceCards = getAllRaceCardsSafe();
+      const displayRaceCards = safeRaceCards.length > 0 ? safeRaceCards : safeArray(raceCards).map(normalizeRaceCardForList);
+      const dateGroups = groupRaceCardsForListByDate(displayRaceCards);
+      debugDetails = { ...debugDetails, safeCount: safeRaceCards.length, displayCount: displayRaceCards.length, groupCount: dateGroups.length };
+      return h("section", { className: "screen" },
+        h(SectionTitle, { icon: h(ClipboardList, { size: 18 }), title: "登録済みレース一覧" }),
+        displayRaceCards.length === 0
+          ? h(EmptyState, { title: "登録済みレースはありません", text: "出走表を登録すると、ここに日付ごとで表示されます。" })
+          : h("div", { className: "meeting-week-list" }, dateGroups.map((group) => {
+            const isOpen = openDateKey === group.key;
+            return h("section", { key: group.key, className: "meeting-week-card" },
+              h("button", { type: "button", className: "meeting-week-button", onClick: () => setOpenDateKey(isOpen ? "" : group.key) },
+                h("span", null,
+                  h("strong", null, group.label),
+                  h("small", null, `${group.races.length}レース`)
+                ),
+                h("b", null, isOpen ? "閉じる" : "開く")
+              ),
+              isOpen && h("div", { className: "compact-race-list meeting-week-races" }, group.races.map((race) => h("button", {
+                key: race.raceId,
+                type: "button",
+                className: "compact-race-card",
+                onClick: () => openRaceDetail(race.raceId),
+              },
+                h("span", { className: "compact-race-main" },
+                  h("strong", null, `${race.racecourse}${raceNumberLabel(race.raceNumber)} ${race.raceName}`),
+                  h("span", null, [
+                    race.startTime,
+                    `${race.surface || ""}${race.distance || ""}${race.distance ? "m" : ""}`,
+                    `${race.entriesCount}頭`,
+                    race.raceClass,
+                    `結果：${race.resultStatusLabel}`,
+                  ].filter(Boolean).join(" / ")),
+                  race.winnerName && h("small", { className: "race-winner-line" }, `1着：${race.winnerName} ${race.winnerTime || ""}`)
+                ),
+                h("span", { className: "race-chevron", "aria-hidden": true }, ">")
+              )))
+            );
+          }))
+      );
+    } catch (error) {
+      console.error("Registered race list render failed", error);
+      saveRegisteredListError(error, debugDetails);
+      return h("section", { className: "screen" },
+        h("div", { className: "error-panel" },
+          h("h2", null, "登録済みレース一覧の表示中に問題が発生しました。"),
+          h("p", null, "保存データは削除されていません。ホームへ戻るか、データ診断で状態を確認できます。"),
+          h("details", { className: "storage-debug" },
+            h("summary", null, "エラー詳細を見る"),
+            h("pre", null, `${error?.message || error}\n\n${safeString(error?.stack || "").split("\n").slice(0, 6).join("\n")}\n\n表示対象: ${debugDetails.displayCount || 0}\n安全取得: ${debugDetails.safeCount || 0}`)
+          ),
+          h("div", { className: "recovery-actions" },
+            h("button", { type: "button", className: "primary full-button", onClick: () => setScreen("home") }, "ホームへ戻る"),
+            h("button", { type: "button", className: "secondary full-button", onClick: () => setScreen("diagnostic") }, "データ診断を見る"),
+            h("button", { type: "button", className: "secondary full-button", onClick: safeExportAllLocalStorage }, "バックアップを書き出す")
+          )
+        )
+      );
+    }
     try {
     const allRaceCards = getAllRaceCards();
     const displayRaceCards = sortRaceCardsRecent(allRaceCards.length > 0 ? allRaceCards : raceCards);
