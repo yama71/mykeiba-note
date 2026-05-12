@@ -1896,6 +1896,81 @@ textarea:focus {
   color: #3c372e;
 }
 
+.meeting-week-list {
+  display: grid;
+  gap: 10px;
+}
+
+.meeting-week-card {
+  display: grid;
+  gap: 8px;
+}
+
+.meeting-week-button {
+  width: 100%;
+  min-height: 56px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid #ded6c8;
+  border-radius: 8px;
+  color: #24221d;
+  background: #fffaf1;
+  text-align: left;
+}
+
+.meeting-week-button span {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.meeting-week-button strong {
+  font-size: 15px;
+  line-height: 1.35;
+}
+
+.meeting-week-button small {
+  color: #6b6254;
+  font-weight: 800;
+}
+
+.meeting-week-button b {
+  flex: 0 0 auto;
+  font-size: 12px;
+}
+
+.meeting-week-races {
+  padding-left: 6px;
+  border-left: 3px solid #ded6c8;
+}
+
+.record-frame-display {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.record-inline-tags {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  min-width: 0;
+}
+
+.record-inline-tags span {
+  padding: 3px 7px;
+  border-radius: 999px;
+  color: #4d463a;
+  background: #f2ecdf;
+  font-size: 11px;
+  font-weight: 900;
+  line-height: 1.2;
+}
+
 .rival-win-summary {
   display: grid;
   gap: 8px;

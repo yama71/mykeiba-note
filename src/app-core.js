@@ -1593,6 +1593,54 @@ function sortRaceCardsRecent(raceCards) {
   );
 }
 
+function meetingWeekStart(dateString) {
+  const date = new Date(`${dateString || ""}T00:00:00`);
+  if (Number.isNaN(date.getTime())) return "";
+  const day = date.getDay();
+  const diff = day === 0 ? -1 : day === 6 ? 0 : -(day + 1);
+  date.setDate(date.getDate() + diff);
+  return date.toISOString().slice(0, 10);
+}
+
+function addDays(dateString, days) {
+  const date = new Date(`${dateString || ""}T00:00:00`);
+  if (Number.isNaN(date.getTime())) return "";
+  date.setDate(date.getDate() + days);
+  return date.toISOString().slice(0, 10);
+}
+
+function formatMeetingWeekLabel(races) {
+  const firstRace = safeArray(races)[0] || {};
+  const info = firstRace.raceInfo || {};
+  const track = info.track || "開催";
+  const start = meetingWeekStart(info.raceDate);
+  const end = start ? addDays(start, 1) : "";
+  const round = info.meetingRound || info.meetingNumber || info.meeting || info["開催回"] || "";
+  const days = safeArray(races)
+    .map((race) => race.raceInfo?.meetingDay || race.raceInfo?.dayNumber || race.raceInfo?.["開催日次"] || "")
+    .filter(Boolean);
+  const uniqueDays = [...new Set(days)].sort((a, b) => Number(String(a).replace(/\D/g, "")) - Number(String(b).replace(/\D/g, "")));
+  if (round && uniqueDays.length) {
+    const dayLabel = uniqueDays.map((day) => `${String(day).replace(/日$/, "")}日`).join("・");
+    return `第${String(round).replace(/^第|回$/g, "")}回${track}${dayLabel}${start ? `（${formatDateSlash(start)}-${formatDateSlash(end)}）` : ""}`;
+  }
+  return `${track}開催${start ? ` ${formatDateSlash(start)}-${formatDateSlash(end)}` : ""}`.trim();
+}
+
+function groupRaceCardsByMeetingWeek(raceCards) {
+  const groups = new Map();
+  sortRaceCardsRecent(raceCards).forEach((race) => {
+    const info = race.raceInfo || {};
+    const start = meetingWeekStart(info.raceDate) || info.raceDate || "date-unknown";
+    const key = `${info.track || "track-unknown"}_${start}`;
+    if (!groups.has(key)) groups.set(key, { key, start, track: info.track || "", races: [] });
+    groups.get(key).races.push(race);
+  });
+  return [...groups.values()]
+    .map((group) => ({ ...group, label: formatMeetingWeekLabel(group.races), races: sortRaceCardsRecent(group.races) }))
+    .sort((a, b) => String(b.start || "").localeCompare(String(a.start || "")) || String(a.track).localeCompare(String(b.track)));
+}
+
 function groupHorseRecordsByRace(records) {
   const map = new Map();
   safeArray(records).forEach((record) => {
@@ -2583,14 +2631,28 @@ export function createKeibaApp(React, icons) {
   }
 
   function RegisteredRaceList({ raceCards, openRaceDetail }) {
+    const [openWeekKey, setOpenWeekKey] = useState("");
     const allRaceCards = getAllRaceCards();
     const displayRaceCards = sortRaceCardsRecent(allRaceCards.length > 0 ? allRaceCards : raceCards);
+    const meetingWeeks = groupRaceCardsByMeetingWeek(displayRaceCards);
     return h("section", { className: "screen" },
       h(SectionTitle, { icon: h(ClipboardList, { size: 18 }), title: "登録済みレース一覧" }),
 
       displayRaceCards.length === 0
         ? h(EmptyState, { title: "登録済みレースはありません", text: "出走表インポートで登録すると、ここに表示されます。" })
-        : h("div", { className: "compact-race-list" }, displayRaceCards.map((race) => h(RaceListItem, { key: race.id, race, onOpen: () => openRaceDetail(race.id) })))
+        : h("div", { className: "meeting-week-list" }, meetingWeeks.map((week) => {
+          const isOpen = openWeekKey === week.key;
+          return h("section", { key: week.key, className: "meeting-week-card" },
+            h("button", { type: "button", className: "meeting-week-button", onClick: () => setOpenWeekKey(isOpen ? "" : week.key) },
+              h("span", null,
+                h("strong", null, week.label),
+                h("small", null, `${week.races.length}レース`)
+              ),
+              h("b", null, isOpen ? "閉じる" : "開く")
+            ),
+            isOpen && h("div", { className: "compact-race-list meeting-week-races" }, week.races.map((race) => h(RaceListItem, { key: race.id, race, onOpen: () => openRaceDetail(race.id) })))
+          );
+        }))
     );
   }
 
@@ -3109,7 +3171,6 @@ export function createKeibaApp(React, icons) {
         h("p", { className: "field-label" }, "注目度"),
         h("div", { className: "attention-grid" }, attentionOptions.map((item) => h("button", { type: "button", className: form.attention === item.value ? "selected" : "", key: item.value, onClick: () => update("attention", item.value) }, h("b", null, item.label), h("span", null, item.help))))
       ),
-      h(Field, { label: `自信度 ${form.confidence}` }, h("input", { type: "range", min: "1", max: "5", value: form.confidence, onChange: (event) => update("confidence", Number(event.target.value)) })),
       h("div", { className: "form-actions" }, h("button", { type: "button", className: "secondary", onClick: onCancel }, "キャンセル"), h("button", { className: "primary", disabled: !canSave }, "保存する"))
     );
   }
@@ -3344,20 +3405,17 @@ export function createKeibaApp(React, icons) {
             h("span", null, `騎手: ${record.jockey || "-"} ${record.carriedWeight || "-"}kg`),
             h("span", null, `タイム: ${record.time || "-"} / 上がり ${record.last3f || "-"} / テン1F ${record.firstFurlongEstimate || "-"}`),
             h("span", null, `3角 ${record.corner3 || "-"}番手 / 4角 ${record.corner4 || "-"}番手`),
-            h("span", { className: "record-frame-display" }, h(FrameHorseNumbers, { frame: record.frameNumber, horseNumber: record.horseNumber }))
-          ),
-          memo && h("div", { className: "record-memo-badge" }, `メモあり ${memoCount}件`)
+            h("span", { className: "record-frame-display" },
+              h(FrameHorseNumbers, { frame: record.frameNumber, horseNumber: record.horseNumber }),
+              tags.length > 0 && h("span", { className: "record-inline-tags" }, tags.slice(0, 5).map((tag) => h("span", { key: tag }, tag)))
+            )
+          )
         )
       ),
       h("div", { className: "inline-actions record-actions" },
         h("button", { type: "button", className: "secondary small", onClick: onWriteMemo }, "このレースのメモを書く")
       ),
       expanded && h("div", { className: "record-detail" },
-        memo && h("div", { className: "record-linked-memo compact" },
-          h("h4", null, "メモあり"),
-          h("div", { className: `rank mini-rank rank-${memo.rating || memo.attention || "C"}` }, memo.rating || memo.attention || "-"),
-          tags.length > 0 && h("div", { className: "tag-row compact-tags" }, tags.map((tag) => h("span", { key: tag }, tag)))
-        ),
         h("div", { className: "inline-actions record-actions" },
           h("button", { type: "button", className: "primary small", onClick: onOpenRace }, "このレース結果を詳しく見る")
         ),
@@ -3395,7 +3453,7 @@ export function createKeibaApp(React, icons) {
     return h("article", { className: "horse-card horse-card-actionable" },
       h("button", { className: "horse-card-main", onClick: onOpen },
         h("div", { className: `rank rank-${horse.maxAttention}` }, horse.maxAttention),
-        h("div", null, h("h3", null, horse.horseName), h("p", null, `${horse.latest.raceDate}・${horse.latest.track}${horse.latest.raceNumber ? raceNumberLabel(horse.latest.raceNumber) : ""}・${horse.latest.distance || "距離未入力"}`), h("div", { className: "mini-tags" }, h("span", null, `メモ ${horse.count}`), h("span", null, `成績 ${horse.recordCount || 0}`), h("span", null, `自信度 ${horse.latest.confidence}`)))
+        h("div", null, h("h3", null, horse.horseName), h("p", null, `${horse.latest.raceDate}・${horse.latest.track}${horse.latest.raceNumber ? raceNumberLabel(horse.latest.raceNumber) : ""}・${horse.latest.distance || "距離未入力"}`), h("div", { className: "mini-tags" }, h("span", null, `メモ ${horse.count}`), h("span", null, `成績 ${horse.recordCount || 0}`)))
       ),
     );
   }
@@ -3411,7 +3469,6 @@ export function createKeibaApp(React, icons) {
         h("div", { className: "facts" }, h("span", null, `馬場 ${memo.going}`), h("span", null, `着順 ${memo.finish || "-"}`), h("span", null, `通過 ${memo.position || "-"}`), h("span", null, `上がり ${memo.last3f || "-"}`)),
         memo.memo && h("p", { className: "memo-text" }, memo.memo),
         tags.length > 0 && h("div", { className: "tag-row" }, tags.slice(0, 8).map((tag) => h("span", { key: tag }, tag))),
-        h("p", { className: "confidence" }, h(Star, { size: 14 }), ` 自信度 ${memo.confidence}/5`)
       ),
       onDelete && h("button", { className: "delete-button", onClick: onDelete, "aria-label": "メモを削除" }, h(Trash2, { size: 18 }))
     );
