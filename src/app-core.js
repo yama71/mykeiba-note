@@ -930,6 +930,9 @@ function sanitizeRaceInfo(info = {}) {
     distance: String(info.distance || ""),
     courseType: info.courseType || "",
     going: info.going || "",
+    weather: info.weather || info["天気"] || "",
+    turfGoing: info.turfGoing || info.turfCondition || info["芝馬場"] || "",
+    dirtGoing: info.dirtGoing || info.dirtCondition || info["ダート馬場"] || "",
   };
 }
 
@@ -1406,6 +1409,84 @@ function hasRaceResult(race, horseRecords = []) {
 
 function sortResultRows(rows) {
   return safeArray(rows).map(sanitizeResultRow).sort((a, b) => Number(a.finish || 999) - Number(b.finish || 999));
+}
+
+function raceKeyFromRecord(record = {}) {
+  return record.raceId || buildStableRaceId({
+    date: record.raceDate || record.date || "",
+    racecourse: record.track || record.racecourse || "",
+    raceNumber: record.raceNumber || record.R || "",
+  });
+}
+
+function recordDateValue(record = {}) {
+  return new Date(record.raceDate || record.date || record.createdAt || 0).getTime() || 0;
+}
+
+function isWinRecord(record = {}) {
+  return String(record.finish || record.rank || "").replace(/[^\d]/g, "") === "1";
+}
+
+function isOpenOrHigherClass(value = "") {
+  const text = String(value || "");
+  return /OP|L|GI|GⅠ|GII|GⅡ|GIII|GⅢ|G1|G2|G3|重賞|オープン|リステッド/i.test(text);
+}
+
+function winLabelForRecord(record = {}) {
+  const raceClass = record.raceClass || "";
+  const raceName = record.raceName || "";
+  if (isOpenOrHigherClass(raceClass) && raceName) return raceName;
+  return raceClass || raceName || "勝利";
+}
+
+function buildRivalWinFollowUps(targetRecord, allRecords, currentHorseName) {
+  const targetRaceKey = raceKeyFromRecord(targetRecord);
+  if (!targetRaceKey) return { status: "missing", items: [], extraCount: 0 };
+
+  const groupedByHorse = new Map();
+  safeArray(allRecords).forEach((record) => {
+    const name = normalizeHorseName(record.horseName || "");
+    if (!name) return;
+    if (!groupedByHorse.has(name)) groupedByHorse.set(name, []);
+    groupedByHorse.get(name).push(record);
+  });
+
+  const targetNames = new Set(
+    safeArray(allRecords)
+      .filter((record) => raceKeyFromRecord(record) === targetRaceKey)
+      .map((record) => normalizeHorseName(record.horseName || ""))
+      .filter(Boolean)
+  );
+
+  targetNames.delete(normalizeHorseName(currentHorseName || targetRecord.horseName || ""));
+  if (targetNames.size === 0) return { status: "insufficient", items: [], extraCount: 0 };
+
+  const wins = [];
+  targetNames.forEach((horseName) => {
+    const records = safeArray(groupedByHorse.get(horseName)).sort((a, b) => recordDateValue(a) - recordDateValue(b));
+    const raceIndex = records.findIndex((record) => raceKeyFromRecord(record) === targetRaceKey);
+    if (raceIndex < 0 || raceIndex >= records.length - 1) return;
+    const laterRecords = records.slice(raceIndex + 1);
+    const laterWins = laterRecords
+      .map((record, index) => ({ record, runAfter: index + 1 }))
+      .filter((item) => isWinRecord(item.record));
+    if (laterWins.length === 0) return;
+    const latestWin = laterWins[laterWins.length - 1];
+    wins.push({
+      horseName,
+      originalFinish: records[raceIndex].finish || "-",
+      runAfter: latestWin.runAfter,
+      winRecord: latestWin.record,
+      label: winLabelForRecord(latestWin.record),
+    });
+  });
+
+  wins.sort((a, b) => a.runAfter - b.runAfter || Number(a.originalFinish || 999) - Number(b.originalFinish || 999));
+  return {
+    status: wins.length > 0 ? "ok" : "none",
+    items: wins.slice(0, 5),
+    extraCount: Math.max(0, wins.length - 5),
+  };
 }
 
 function raceCardsFromHorseRecords(records) {
@@ -2570,19 +2651,23 @@ export function createKeibaApp(React, icons) {
         : h("p", null, "出走馬データはまだありません。")
     );
     const renderResultList = (rows, compact = false) => h("div", { className: compact ? "result-card-stack top3" : "result-card-stack" }, rows.map((row) => h(ResultHorseCard, { key: row.id || `${row.finish}-${row.horseName}`, row, compact, openHorse })));
+    const raceConditionItems = [
+      info.raceTime,
+      info.raceClass,
+      `${info.surface || ""}${info.distance || "-"}m`,
+      info.courseType,
+      `${entries.length}頭`,
+      info.going,
+      info.weather ? `天気:${info.weather}` : "",
+      info.turfGoing ? `芝:${info.turfGoing}` : "",
+      info.dirtGoing ? `ダ:${info.dirtGoing}` : "",
+    ].filter(Boolean);
 
     return h("section", { className: "screen race-detail-screen" },
       h("article", { className: "race-detail-hero" },
         h("p", null, `${info.raceDate || "-"} ${info.track || "-"}${raceNumberLabel(info.raceNumber)}`),
         h("h2", null, info.raceName || "レース名未入力"),
-        h("div", { className: "race-detail-line" }, [
-          info.raceTime,
-          info.raceClass,
-          `${info.surface || ""}${info.distance || "-"}m`,
-          info.courseType,
-          `${entries.length}頭`,
-          info.going,
-        ].filter(Boolean).map((item) => h("span", { key: item }, item)))
+        h("div", { className: "race-detail-line" }, raceConditionItems.map((item) => h("span", { key: item }, item)))
       ),
       h("section", { className: "race-detail-panel result-status-panel" },
         h("h3", null, "結果ステータス"),
@@ -2631,14 +2716,12 @@ export function createKeibaApp(React, icons) {
 
   function RaceLapPanel({ result }) {
     const laps = safeArray(result?.lapTimes).filter(Boolean);
-    const hasLapInfo = laps.length > 0 || result?.last4F || result?.last3F || result?.firstFurlongBase;
+    const hasLapInfo = laps.length > 0 || result?.last4F || result?.last3F || result?.firstHalfTime || result?.secondHalfTime;
     if (!hasLapInfo) return null;
     return h("section", { className: "race-detail-panel race-lap-panel" },
       h("h3", null, "レースラップ"),
       laps.length > 0 && h("p", { className: "lap-line" }, laps.join(" - ")),
       h("div", { className: "lap-summary-grid" },
-        h("span", null, h("small", null, "テン1F"), h("strong", null, result.firstFurlongBase || "-")),
-        h("span", null, h("small", null, "使用通過順位"), h("strong", null, result.firstFurlongCorner ? `${result.firstFurlongCorner}コーナー` : "-")),
         h("span", null, h("small", null, "前半"), h("strong", null, result.firstHalfTime || "計算不可")),
         h("span", null, h("small", null, "後半"), h("strong", null, result.secondHalfTime || "計算不可")),
         h("span", null, h("small", null, "前後半差"), h("strong", null, result.halfDiff || "計算不可")),
@@ -3167,6 +3250,7 @@ export function createKeibaApp(React, icons) {
               key: record.id || recordKey(record),
               record,
               memo: linkedMemo,
+              rivalSummary: buildRivalWinFollowUps(record, horseRecords, normalizedName),
               expanded: openRecordId === (record.id || recordKey(record)),
               onToggle: () => setOpenRecordId((current) => current === (record.id || recordKey(record)) ? "" : (record.id || recordKey(record))),
               onWriteMemo: () => startMemoFromRecord(record),
@@ -3243,7 +3327,7 @@ export function createKeibaApp(React, icons) {
     ) || null;
   }
 
-  function HorseRecordCard({ record, memo, expanded, onToggle, onWriteMemo, onOpenRace }) {
+  function HorseRecordCard({ record, memo, rivalSummary, expanded, onToggle, onWriteMemo, onOpenRace }) {
     const tags = memo ? [...new Set([...safeArray(memo.tags), ...safeArray(memo.troubleTags), ...safeArray(memo.strongTags), ...safeArray(memo.buyTags)])].filter(Boolean) : [];
     const memoCount = memo ? 1 : 0;
     return h("article", { className: `record-card finish-${record.finish === "1" ? "win" : "normal"}` },
@@ -3269,16 +3353,6 @@ export function createKeibaApp(React, icons) {
         h("button", { type: "button", className: "secondary small", onClick: onWriteMemo }, "このレースのメモを書く")
       ),
       expanded && h("div", { className: "record-detail" },
-        h("dl", null,
-          h("dt", null, "全成績情報"),
-          h("dd", null, `${record.finish || "-"}着 / ${record.fieldSize || "-"}頭 / 人気${record.popularity || "-"}`),
-          h("dt", null, "条件"),
-          h("dd", null, `${record.surface || "-"}${record.distance || ""} ${record.going || "-"} / ${record.jockey || "-"} ${record.carriedWeight || "-"}kg`),
-          h("dt", null, "タイム"),
-          h("dd", null, `${record.time || "-"} / 着差 ${record.margin || "なし"} / 上がり${record.last3f || "-"} / テン1F ${record.firstFurlongEstimate || "-"}`),
-          h("dt", null, "通過"),
-          h("dd", null, `3角${record.corner3 || "-"}番手 / 4角${record.corner4 || "-"}番手`)
-        ),
         memo && h("div", { className: "record-linked-memo compact" },
           h("h4", null, "メモあり"),
           h("div", { className: `rank mini-rank rank-${memo.rating || memo.attention || "C"}` }, memo.rating || memo.attention || "-"),
@@ -3286,8 +3360,30 @@ export function createKeibaApp(React, icons) {
         ),
         h("div", { className: "inline-actions record-actions" },
           h("button", { type: "button", className: "primary small", onClick: onOpenRace }, "このレース結果を詳しく見る")
-        )
+        ),
+        h(RivalWinSummary, { summary: rivalSummary })
       )
+    );
+  }
+
+  function RivalWinSummary({ summary }) {
+    const safeSummary = summary || { status: "missing", items: [], extraCount: 0 };
+    let message = "";
+    if (safeSummary.status === "insufficient" || safeSummary.status === "missing") {
+      message = "他馬のその後成績データが不足しています";
+    } else if (safeArray(safeSummary.items).length === 0) {
+      message = "このレースの出走馬から後の勝ち上がり馬はまだ確認できません";
+    }
+    return h("section", { className: "rival-win-summary" },
+      h("h4", null, "このレースの他馬のその後の勝利状況"),
+      message
+        ? h("p", null, message)
+        : h("ul", null,
+          safeSummary.items.map((item) => h("li", { key: `${item.horseName}-${item.runAfter}-${item.label}` },
+            `${item.originalFinish || "-"}着馬 ${item.horseName} ${item.runAfter === 1 ? "次走勝利" : `${item.runAfter}走後勝利`}（${item.label || "勝利"}）`
+          )),
+          safeSummary.extraCount > 0 && h("li", { className: "rival-win-extra" }, `他${safeSummary.extraCount}頭が勝利`)
+        )
     );
   }
 

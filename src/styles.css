@@ -1896,6 +1896,46 @@ textarea:focus {
   color: #3c372e;
 }
 
+.rival-win-summary {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid #ded6c8;
+  border-radius: 8px;
+  background: #fffaf1;
+}
+
+.rival-win-summary h4 {
+  margin: 0;
+  font-size: 15px;
+}
+
+.rival-win-summary p {
+  margin: 0;
+  color: #6b6254;
+  font-size: 13px;
+  font-weight: 800;
+  line-height: 1.5;
+}
+
+.rival-win-summary ul {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding-left: 18px;
+}
+
+.rival-win-summary li {
+  color: #302a22;
+  font-size: 13px;
+  font-weight: 800;
+  line-height: 1.45;
+}
+
+.rival-win-summary .rival-win-extra {
+  color: #6b6254;
+}
+
 .horse-note-section,
 .horse-note-form,
 .horse-note-card {
