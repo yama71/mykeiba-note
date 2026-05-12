@@ -637,6 +637,8 @@ function parseRaceResultMeta(text, raceInfo = {}) {
   const lapText = lapLine.replace(/.*?(?:ハロンタイム|繝上Ο繝ｳ繧ｿ繧､繝)/, "");
   const lapTimes = lapText.match(/\d+(?:\.\d+)?/g) || [];
   const climbMatch = climbLine.match(/4F\s*([0-9.]+)\s*-\s*3F\s*([0-9.]+)/) || climbLine.match(/3F\s*([0-9.]+).*4F\s*([0-9.]+)/);
+  const last4F = climbMatch ? (climbLine.includes("3F") && climbLine.indexOf("3F") < climbLine.indexOf("4F") ? climbMatch[2] : climbMatch[1]) : "";
+  const last3F = climbMatch ? (climbLine.includes("3F") && climbLine.indexOf("3F") < climbLine.indexOf("4F") ? climbMatch[1] : climbMatch[2]) : "";
   const cornerPassages = {};
 
   [1, 2, 3, 4].forEach((corner) => {
@@ -650,14 +652,19 @@ function parseRaceResultMeta(text, raceInfo = {}) {
   });
 
   const half = calculateHalfTimes(lapTimes, raceInfo.distance);
+  const threeF = calculateThreeFTimes(lapTimes, raceInfo.distance, last3F);
   const firstFurlong = calculateFirstFurlongBase(lapTimes, raceInfo.distance);
   return {
     lapTimes,
-    last4F: climbMatch ? (climbLine.includes("3F") && climbLine.indexOf("3F") < climbLine.indexOf("4F") ? climbMatch[2] : climbMatch[1]) : "",
-    last3F: climbMatch ? (climbLine.includes("3F") && climbLine.indexOf("3F") < climbLine.indexOf("4F") ? climbMatch[1] : climbMatch[2]) : "",
+    last4F,
+    last3F,
     firstHalfTime: half.firstHalfTime,
     secondHalfTime: half.secondHalfTime,
     halfDiff: half.halfDiff,
+    first3F: threeF.first3F,
+    last3F: threeF.last3F || last3F,
+    threeFDiff: threeF.threeFDiff,
+    isFirst100mStart: threeF.isFirst100mStart,
     firstFurlongBase: firstFurlong,
     firstFurlongCorner: firstExistingCorner(cornerPassages),
     firstFurlongTopHorseNumbers: extractHorseNumbersInOrder(cornerPassages[firstExistingCorner(cornerPassages)] || "").slice(0, 5),
@@ -693,6 +700,53 @@ function calculateHalfTimes(lapTimes, distance) {
     firstHalfTime: first.toFixed(1),
     secondHalfTime: second.toFixed(1),
     halfDiff: (diff >= 0 ? "+" : "") + diff.toFixed(1),
+  };
+}
+
+function lapDistancesForRace(lapTimes, distance) {
+  const laps = safeArray(lapTimes).map((value) => Number(value)).filter((value) => Number.isFinite(value));
+  const numericDistance = Number(String(distance || "").replace(/[^\d.]/g, ""));
+  const hasFirst100m = isFirst100mDistance(numericDistance) && laps.length > 1;
+  return laps.map((_, index) => (hasFirst100m && index === 0 ? 100 : 200));
+}
+
+function calculateSegmentTime(lapTimes, lapDistances, startMeter, endMeter) {
+  const laps = safeArray(lapTimes).map((value) => Number(value)).filter((value) => Number.isFinite(value));
+  const distances = safeArray(lapDistances).map((value) => Number(value)).filter((value) => Number.isFinite(value) && value > 0);
+  if (laps.length === 0 || distances.length === 0 || laps.length !== distances.length) return "";
+  const startTarget = Number(startMeter);
+  const endTarget = Number(endMeter);
+  if (!Number.isFinite(startTarget) || !Number.isFinite(endTarget) || endTarget <= startTarget) return "";
+
+  let covered = 0;
+  let total = 0;
+  laps.forEach((lap, index) => {
+    const distance = distances[index];
+    const start = covered;
+    const end = covered + distance;
+    const usedDistance = Math.max(0, Math.min(end, endTarget) - Math.max(start, startTarget));
+    if (usedDistance > 0) total += lap * (usedDistance / distance);
+    covered = end;
+  });
+  return total > 0 ? total : "";
+}
+
+function calculateThreeFTimes(lapTimes, distance, officialLast3F = "") {
+  const laps = safeArray(lapTimes).map((value) => Number(value)).filter((value) => Number.isFinite(value));
+  if (laps.length === 0) return { first3F: "", last3F: officialLast3F || "", threeFDiff: "", isFirst100mStart: false };
+  const numericDistance = Number(String(distance || "").replace(/[^\d.]/g, ""));
+  const distances = lapDistancesForRace(laps, numericDistance);
+  const totalDistance = numericDistance > 0 ? numericDistance : distances.reduce((sum, value) => sum + value, 0);
+  const first = calculateSegmentTime(laps, distances, 0, 600);
+  const lastCalculated = totalDistance >= 600 ? calculateSegmentTime(laps, distances, totalDistance - 600, totalDistance) : "";
+  const official = Number(String(officialLast3F || "").replace(/[^\d.]/g, ""));
+  const last = lastCalculated || (Number.isFinite(official) ? official : "");
+  const diff = Number.isFinite(first) && Number.isFinite(last) ? last - first : "";
+  return {
+    first3F: Number.isFinite(first) ? first.toFixed(1) : "",
+    last3F: Number.isFinite(last) ? last.toFixed(1) : (officialLast3F || ""),
+    threeFDiff: Number.isFinite(diff) ? (diff >= 0 ? "+" : "") + diff.toFixed(1) : "",
+    isFirst100mStart: isFirst100mDistance(numericDistance) && laps.length > 1,
   };
 }
 
@@ -880,6 +934,10 @@ function buildRaceResult(rows, averageWinningTime, sourceText = "", raceInfo = {
     firstHalfTime: meta.firstHalfTime,
     secondHalfTime: meta.secondHalfTime,
     halfDiff: meta.halfDiff,
+    first3F: meta.first3F,
+    last3F: meta.last3F,
+    threeFDiff: meta.threeFDiff,
+    isFirst100mStart: meta.isFirst100mStart,
     firstFurlongBase: meta.firstFurlongBase,
     firstFurlongCorner: meta.firstFurlongCorner,
     firstFurlongTopHorseNumbers: meta.firstFurlongTopHorseNumbers,
@@ -3048,7 +3106,7 @@ export function createKeibaApp(React, icons) {
             h("h3", null, "結果サマリー"),
             top3.length ? renderResultList(top3, true) : h("p", null, "表示できる結果データがありません。")
           ),
-          h(RaceLapPanel, { result: resultMeta }),
+          h(RaceLapPanel, { result: resultMeta, raceInfo: info }),
           h(CornerPassagePanel, { result: resultMeta }),
           h("div", { className: "race-detail-actions" },
             h("button", { type: "button", className: "secondary", onClick: () => setShowAllResults((current) => !current) }, showAllResults ? "全着順を閉じる" : "全着順を見る"),
@@ -3083,21 +3141,30 @@ export function createKeibaApp(React, icons) {
     );
   }
 
-  function RaceLapPanel({ result }) {
+  function RaceLapPanel({ result, raceInfo = {} }) {
     const laps = safeArray(result?.lapTimes).filter(Boolean);
-    const hasLapInfo = laps.length > 0 || result?.last4F || result?.last3F || result?.firstHalfTime || result?.secondHalfTime;
+    const threeF = result?.first3F || result?.threeFDiff
+      ? {
+        first3F: result.first3F || "",
+        last3F: result.last3F || "",
+        threeFDiff: result.threeFDiff || "",
+        isFirst100mStart: Boolean(result.isFirst100mStart),
+      }
+      : calculateThreeFTimes(laps, raceInfo.distance, result?.last3F || "");
+    const hasLapInfo = laps.length > 0 || result?.last4F || result?.last3F || threeF.first3F || threeF.last3F;
     if (!hasLapInfo) return null;
     return h("section", { className: "race-detail-panel race-lap-panel" },
-      h("h3", null, "レースラップ"),
+      h("h3", null, "\u30ec\u30fc\u30b9\u30e9\u30c3\u30d7"),
       laps.length > 0 && h("p", { className: "lap-line" }, laps.join(" - ")),
       h("div", { className: "lap-summary-grid" },
-        h("span", null, h("small", null, "前半"), h("strong", null, result.firstHalfTime || "計算不可")),
-        h("span", null, h("small", null, "後半"), h("strong", null, result.secondHalfTime || "計算不可")),
-        h("span", null, h("small", null, "前後半差"), h("strong", null, result.halfDiff || "計算不可")),
-        h("span", null, h("small", null, "上り4F"), h("strong", null, result.last4F || "-")),
-        h("span", null, h("small", null, "上り3F"), h("strong", null, result.last3F || "-"))
+        h("span", null, h("small", null, "\u524d\u534a3F"), h("strong", null, threeF.first3F || "-")),
+        h("span", null, h("small", null, "\u5f8c\u534a3F"), h("strong", null, threeF.last3F || "-")),
+        h("span", null, h("small", null, "\u524d\u5f8c\u534a3F\u5dee"), h("strong", null, threeF.threeFDiff || "-")),
+        h("span", null, h("small", null, "\u4e0a\u308a4F"), h("strong", null, result.last4F || "-")),
+        h("span", null, h("small", null, "\u4e0a\u308a3F"), h("strong", null, result.last3F || "-"))
       ),
-      safeArray(result.firstFurlongTopHorseNumbers).length > 0 && h("p", { className: "lap-note" }, `テン1F上位5頭: ${safeArray(result.firstFurlongTopHorseNumbers).join(", ")}`)
+      laps.length > 0 && h("p", { className: "lap-note" }, `100m\u59cb\u307e\u308a\u8ddd\u96e2\uff1a${threeF.isFirst100mStart ? "\u306f\u3044" : "\u3044\u3044\u3048"}`),
+      safeArray(result.firstFurlongTopHorseNumbers).length > 0 && h("p", { className: "lap-note" }, `\u30c6\u30f31F\u4e0a\u4f4d5\u982d: ${safeArray(result.firstFurlongTopHorseNumbers).join(", ")}`)
     );
   }
 
@@ -3312,6 +3379,9 @@ export function createKeibaApp(React, icons) {
       firstHalfTime: resultMeta?.firstHalfTime || "",
       secondHalfTime: resultMeta?.secondHalfTime || "",
       halfDiff: resultMeta?.halfDiff || "",
+      first3F: resultMeta?.first3F || "",
+      threeFDiff: resultMeta?.threeFDiff || "",
+      isFirst100mStart: resultMeta?.isFirst100mStart ? "はい" : "いいえ",
       firstFurlongBase: resultMeta?.firstFurlongBase || "",
       firstFurlongCorner: resultMeta?.firstFurlongCorner || "",
       firstFurlongTopHorseNumbers: safeArray(resultMeta?.firstFurlongTopHorseNumbers),
@@ -3330,7 +3400,7 @@ export function createKeibaApp(React, icons) {
         h("span", null, `entries配列: ${summary.entriesIsArray ? "はい" : "いいえ"}`)
       ),
       h("p", null, `${info.track || "競馬場未入力"} ${raceNumberLabel(info.raceNumber) || "レース番号未入力"} ${info.raceName || "レース名未入力"}`),
-      resultMeta && h(RaceLapPanel, { result: resultMeta }),
+      resultMeta && h(RaceLapPanel, { result: resultMeta, raceInfo: info }),
       resultMeta && h(CornerPassagePanel, { result: resultMeta }),
       h("pre", null, JSON.stringify(summary, null, 2))
     );
