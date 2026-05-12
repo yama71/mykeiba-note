@@ -1947,6 +1947,19 @@ textarea:focus {
   border-left: 3px solid #ded6c8;
 }
 
+.meeting-race-row {
+  display: grid;
+  gap: 6px;
+}
+
+.tiny-button {
+  width: fit-content;
+  min-height: 34px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  font-size: 12px;
+}
+
 .record-frame-display {
   display: flex;
   align-items: center;

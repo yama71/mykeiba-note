@@ -76,6 +76,10 @@ const emptyRaceInfo = {
   distance: "",
   courseType: "",
   going: "良",
+  meetingNumber: "",
+  meetingDay: "",
+  meetingLabel: "",
+  meetingGroupLabel: "",
 };
 
 const APP_STORAGE_KEYS = [
@@ -917,6 +921,9 @@ function buildStableRaceId(info = {}) {
 function sanitizeRaceInfo(info = {}) {
   const raceNumber = normalizeRaceNumber(info.raceNumber || info.raceNo || info.race || info.raceNum || info.race_number || info.raceIndex || info.R || info["レース番号"]);
   const racecourse = normalizeRaceCourse(info.racecourse || info.track || info.raceCourse || info["競馬場"]);
+  const meetingNumber = String(info.meetingNumber || info.meetingRound || info.meeting || info["開催回次"] || info["開催回"] || "").replace(/[^\d]/g, "");
+  const meetingDay = String(info.meetingDay || info.dayNumber || info["開催日数"] || info["開催日次"] || "").replace(/[^\d]/g, "");
+  const meetingLabel = meetingNumber && meetingDay && racecourse ? `第${meetingNumber}回${racecourse}${meetingDay}日` : String(info.meetingLabel || "");
   return {
     ...emptyRaceInfo,
     ...info,
@@ -933,6 +940,10 @@ function sanitizeRaceInfo(info = {}) {
     weather: info.weather || info["天気"] || "",
     turfGoing: info.turfGoing || info.turfCondition || info["芝馬場"] || "",
     dirtGoing: info.dirtGoing || info.dirtCondition || info["ダート馬場"] || "",
+    meetingNumber,
+    meetingDay,
+    meetingLabel,
+    meetingGroupLabel: info.meetingGroupLabel || "",
   };
 }
 
@@ -1026,6 +1037,10 @@ function sanitizeRaceCard(race = {}) {
     surface: raceInfo.surface || "",
     distance: raceInfo.distance || "",
     going: raceInfo.going || "",
+    meetingNumber: raceInfo.meetingNumber || "",
+    meetingDay: raceInfo.meetingDay || "",
+    meetingLabel: raceInfo.meetingLabel || "",
+    meetingGroupLabel: raceInfo.meetingGroupLabel || "",
     startTime: raceInfo.raceTime || "",
     raceInfo,
     entries,
@@ -1054,6 +1069,10 @@ function toStorageRaceCard(race = {}) {
     surface: safeRace.raceInfo.surface || "",
     distance: safeRace.raceInfo.distance ? Number(safeRace.raceInfo.distance) || null : null,
     going: safeRace.raceInfo.going || "",
+    meetingNumber: safeRace.raceInfo.meetingNumber || "",
+    meetingDay: safeRace.raceInfo.meetingDay || "",
+    meetingLabel: safeRace.raceInfo.meetingLabel || "",
+    meetingGroupLabel: safeRace.raceInfo.meetingGroupLabel || "",
     startTime: safeRace.raceInfo.raceTime || "",
     status: safeRace.result ? "result_registered" : "entry_registered",
     entries: safeArray(safeRace.entries).map(toStorageRaceEntry).filter((entry) => normalizeHorseName(entry.horseName)),
@@ -1615,30 +1634,53 @@ function formatMeetingWeekLabel(races) {
   const track = info.track || "開催";
   const start = meetingWeekStart(info.raceDate);
   const end = start ? addDays(start, 1) : "";
-  const round = info.meetingRound || info.meetingNumber || info.meeting || info["開催回"] || "";
+  const round = info.meetingNumber || info.meetingRound || info.meeting || info["開催回"] || "";
   const days = safeArray(races)
     .map((race) => race.raceInfo?.meetingDay || race.raceInfo?.dayNumber || race.raceInfo?.["開催日次"] || "")
     .filter(Boolean);
   const uniqueDays = [...new Set(days)].sort((a, b) => Number(String(a).replace(/\D/g, "")) - Number(String(b).replace(/\D/g, "")));
   if (round && uniqueDays.length) {
     const dayLabel = uniqueDays.map((day) => `${String(day).replace(/日$/, "")}日`).join("・");
-    return `第${String(round).replace(/^第|回$/g, "")}回${track}${dayLabel}${start ? `（${formatDateSlash(start)}-${formatDateSlash(end)}）` : ""}`;
+    return `第${String(round).replace(/^第|回$/g, "")}回${track}${dayLabel}`;
   }
-  return `${track}開催${start ? ` ${formatDateSlash(start)}-${formatDateSlash(end)}` : ""}`.trim();
+  if (start && end && start !== end) return `${track}開催 ${formatDateSlash(start)}-${formatDateSlash(end)}`;
+  return `${track || "開催情報未設定"} ${start ? formatDateSlash(start) : "日付未設定"}`.trim();
 }
 
 function groupRaceCardsByMeetingWeek(raceCards) {
   const groups = new Map();
   sortRaceCardsRecent(raceCards).forEach((race) => {
     const info = race.raceInfo || {};
+    const meetingNumber = String(info.meetingNumber || "").replace(/[^\d]/g, "");
+    const meetingDay = Number(String(info.meetingDay || "").replace(/[^\d]/g, ""));
     const start = meetingWeekStart(info.raceDate) || info.raceDate || "date-unknown";
-    const key = `${info.track || "track-unknown"}_${start}`;
+    const dayPairStart = meetingDay ? (Math.ceil(meetingDay / 2) * 2 - 1) : "";
+    const key = meetingNumber && meetingDay
+      ? `${info.track || "track-unknown"}_meeting_${meetingNumber}_${dayPairStart}`
+      : `${info.track || "track-unknown"}_date_${start}`;
     if (!groups.has(key)) groups.set(key, { key, start, track: info.track || "", races: [] });
     groups.get(key).races.push(race);
   });
   return [...groups.values()]
     .map((group) => ({ ...group, label: formatMeetingWeekLabel(group.races), races: sortRaceCardsRecent(group.races) }))
     .sort((a, b) => String(b.start || "").localeCompare(String(a.start || "")) || String(a.track).localeCompare(String(b.track)));
+}
+
+function updateStoredRaceMeetingInfo(raceId, meetingNumber, meetingDay) {
+  const current = loadJson(RACE_STORAGE_KEY).map(sanitizeRaceCard);
+  const next = current.map((race) => {
+    if (race.id !== raceId && race.raceId !== raceId) return race;
+    return toStorageRaceCard({
+      ...race,
+      raceInfo: {
+        ...race.raceInfo,
+        meetingNumber,
+        meetingDay,
+      },
+    });
+  });
+  saveJson(RACE_STORAGE_KEY, next);
+  return next;
 }
 
 function groupHorseRecordsByRace(records) {
@@ -2228,6 +2270,8 @@ export function createKeibaApp(React, icons) {
           raceName: String(raceInfo.raceName || "").trim(),
           surface: raceInfo.surface || "",
           going: raceInfo.going || "",
+          meetingNumber: raceInfo.meetingNumber || "",
+          meetingDay: raceInfo.meetingDay || "",
         },
         entries: safeEntries.map(({ id, frameNumber, horseNumber, horseName, sexAge, popularity, jockey, carriedWeight, raw, parsed }) => ({
           id,
@@ -2270,6 +2314,11 @@ export function createKeibaApp(React, icons) {
         h(Field, { label: "レース番号", required: true }, h("input", { inputMode: "numeric", value: raceInfo.raceNumber, onChange: (event) => updateInfo("raceNumber", event.target.value), placeholder: "11" })),
         h(Field, { label: "発走時刻" }, h("input", { value: raceInfo.raceTime, onChange: (event) => updateInfo("raceTime", event.target.value), placeholder: "15:40" }))
       ),
+      h("div", { className: "two-col" },
+        h(Field, { label: "開催回次" }, h("input", { inputMode: "numeric", value: raceInfo.meetingNumber || "", onChange: (event) => updateInfo("meetingNumber", event.target.value), placeholder: "3" })),
+        h(Field, { label: "開催日数" }, h("input", { inputMode: "numeric", value: raceInfo.meetingDay || "", onChange: (event) => updateInfo("meetingDay", event.target.value), placeholder: "7" }))
+      ),
+      h("p", { className: "lookup-note" }, "中央競馬は基本8日間で1開催です。例：3回中山7日目"),
       h(Field, { label: "レース名" }, h("input", { value: raceInfo.raceName, onChange: (event) => updateInfo("raceName", event.target.value), placeholder: "例：○○ステークス" })),
       h("div", { className: "three-col" },
         h(Field, { label: "芝/ダート" }, h("select", { value: raceInfo.surface, onChange: (event) => updateInfo("surface", event.target.value) }, surfaceOptions.map((surface) => h("option", { key: surface }, surface)))),
@@ -2632,9 +2681,21 @@ export function createKeibaApp(React, icons) {
 
   function RegisteredRaceList({ raceCards, openRaceDetail }) {
     const [openWeekKey, setOpenWeekKey] = useState("");
+    const [refreshKey, setRefreshKey] = useState(0);
     const allRaceCards = getAllRaceCards();
     const displayRaceCards = sortRaceCardsRecent(allRaceCards.length > 0 ? allRaceCards : raceCards);
     const meetingWeeks = groupRaceCardsByMeetingWeek(displayRaceCards);
+    void refreshKey;
+    function editMeeting(race) {
+      const safeRace = sanitizeRaceCard(race);
+      const current = safeRace.raceInfo || {};
+      const nextNumber = window.prompt("開催回次を入力してください（例：3）", current.meetingNumber || "");
+      if (nextNumber === null) return;
+      const nextDay = window.prompt("開催日数を入力してください（例：7）", current.meetingDay || "");
+      if (nextDay === null) return;
+      updateStoredRaceMeetingInfo(safeRace.raceId || safeRace.id, nextNumber, nextDay);
+      setRefreshKey((value) => value + 1);
+    }
     return h("section", { className: "screen" },
       h(SectionTitle, { icon: h(ClipboardList, { size: 18 }), title: "登録済みレース一覧" }),
 
@@ -2650,7 +2711,10 @@ export function createKeibaApp(React, icons) {
               ),
               h("b", null, isOpen ? "閉じる" : "開く")
             ),
-            isOpen && h("div", { className: "compact-race-list meeting-week-races" }, week.races.map((race) => h(RaceListItem, { key: race.id, race, onOpen: () => openRaceDetail(race.id) })))
+            isOpen && h("div", { className: "compact-race-list meeting-week-races" }, week.races.map((race) => h("div", { key: race.id, className: "meeting-race-row" },
+              h(RaceListItem, { race, onOpen: () => openRaceDetail(race.id) }),
+              h("button", { type: "button", className: "secondary tiny-button", onClick: () => editMeeting(race) }, "開催情報を編集")
+            )))
           );
         }))
     );
@@ -2715,6 +2779,7 @@ export function createKeibaApp(React, icons) {
     const renderResultList = (rows, compact = false) => h("div", { className: compact ? "result-card-stack top3" : "result-card-stack" }, rows.map((row) => h(ResultHorseCard, { key: row.id || `${row.finish}-${row.horseName}`, row, compact, openHorse })));
     const raceConditionItems = [
       info.raceTime,
+      info.meetingLabel,
       info.raceClass,
       `${info.surface || ""}${info.distance || "-"}m`,
       info.courseType,
