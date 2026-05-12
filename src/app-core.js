@@ -22,6 +22,9 @@ const STORAGE_ALIASES = {
   brokenWeeklyRaces: BROKEN_WEEKLY_RACES_KEY,
   brokenRaceEntries: BROKEN_RACE_ENTRIES_KEY,
   brokenRaceResults: BROKEN_RACE_RESULTS_KEY,
+  brokenWeeklyRacesLegacy: "brokenWeeklyRaces",
+  brokenRaceEntriesLegacy: "brokenRaceEntries",
+  brokenRaceResultsLegacy: "brokenRaceResults",
 };
 const storageWarnings = [];
 
@@ -226,7 +229,7 @@ function runRecoveryAction(action) {
 
 function returnToHomeSafely() {
   try {
-    localStorage.setItem(FORCE_HOME_STORAGE_KEY, "1");
+    localStorage.removeItem(FORCE_HOME_STORAGE_KEY);
   } catch (error) {
     console.error("MyKeiba force home failed", error);
   } finally {
@@ -1292,6 +1295,9 @@ function getDataDiagnostics() {
   const raceResults = races.filter((race) => race.result || race.status === "result_registered").length;
   const entryRegistered = races.filter((race) => race.status === "entry_registered").length;
   const raceEntries = races.reduce((sum, race) => sum + safeArray(race.entries).length, 0);
+  const brokenWeeklyRaces = loadJson(BROKEN_WEEKLY_RACES_KEY).length + loadJson("brokenWeeklyRaces").length;
+  const brokenRaceEntries = loadJson(BROKEN_RACE_ENTRIES_KEY).length + loadJson("brokenRaceEntries").length;
+  const brokenRaceResults = loadJson(BROKEN_RACE_RESULTS_KEY).length + loadJson("brokenRaceResults").length;
   return {
     horseRecords: loadJson(HORSE_RECORDS_STORAGE_KEY).length,
     horseNotes: loadJson(MEMO_STORAGE_KEY).length,
@@ -1301,11 +1307,17 @@ function getDataDiagnostics() {
     weeklyRaces: races.length,
     averageTimes: loadJson(AVERAGE_TIMES_STORAGE_KEY).length || defaultAverageTimes.length,
     unreadable,
-    quarantined: loadJson(BROKEN_WEEKLY_RACES_KEY).length + loadJson(BROKEN_RACE_ENTRIES_KEY).length + loadJson(BROKEN_RACE_RESULTS_KEY).length,
-    brokenWeeklyRaces: loadJson(BROKEN_WEEKLY_RACES_KEY).length,
-    brokenRaceEntries: loadJson(BROKEN_RACE_ENTRIES_KEY).length,
-    brokenRaceResults: loadJson(BROKEN_RACE_RESULTS_KEY).length,
+    quarantined: brokenWeeklyRaces + brokenRaceEntries + brokenRaceResults,
+    brokenWeeklyRaces,
+    brokenRaceEntries,
+    brokenRaceResults,
   };
+}
+
+function isolatedBrokenMessage(count) {
+  return count > 0
+    ? `隔離済みデータあり。通常表示には使用しません。（${count}件）`
+    : "なし";
 }
 
 function normalizeHorseName(value) {
@@ -1805,10 +1817,14 @@ export function createKeibaApp(React, icons) {
 
   function App() {
     const [screen, setScreen] = useState("home");
-    const [safeHomeMode] = useState(() => localStorage.getItem(FORCE_HOME_STORAGE_KEY) === "1");
+    const [safeHomeMode] = useState(() => {
+      const requested = localStorage.getItem(FORCE_HOME_STORAGE_KEY) === "1";
+      if (requested) localStorage.removeItem(FORCE_HOME_STORAGE_KEY);
+      return requested;
+    });
     const [memos, setMemos] = useState(() => loadJson(MEMO_STORAGE_KEY));
-    const [raceCards, setRaceCards] = useState(() => safeHomeMode ? [] : loadRaceCardsFromStorage());
-    const [skipNextRaceSave, setSkipNextRaceSave] = useState(safeHomeMode);
+    const [raceCards, setRaceCards] = useState(() => loadRaceCardsFromStorage());
+    const [skipNextRaceSave, setSkipNextRaceSave] = useState(false);
     const [horseRecords, setHorseRecords] = useState(() => {
       const savedRecords = loadJson(HORSE_RECORDS_STORAGE_KEY);
       return savedRecords.length > 0 ? savedRecords : buildHorseRecordsFromRaceCards(sanitizeRaceCards(loadJson(RACE_STORAGE_KEY)));
@@ -1830,7 +1846,7 @@ export function createKeibaApp(React, icons) {
       const allRaceCards = getAllRaceCards();
       const mainRaceCards = normalizeStoredRaceCards(loadJson(RACE_STORAGE_KEY));
       if (allRaceCards.length > mainRaceCards.length) persistRaceCardsToStorage(allRaceCards);
-      if (!safeHomeMode && allRaceCards.length > 0) setRaceCards(allRaceCards);
+      if (allRaceCards.length > 0) setRaceCards(allRaceCards);
     }, []);
     useEffect(() => saveJson(HORSE_RECORDS_STORAGE_KEY, horseRecords), [horseRecords]);
     useEffect(() => saveJson(AVERAGE_TIMES_STORAGE_KEY, averageTimes), [averageTimes]);
@@ -2124,7 +2140,7 @@ export function createKeibaApp(React, icons) {
           screen === "import" && h(RaceImport, { onSave: addRaceCard }),
           screen === "result" && h(ResultImport, { raceCards, horseRecords, selectedRaceId, averageTimes, onSave: saveRaceResult, openHorse }),
         screen === "race" && h(RaceDetail, { raceCards, selectedRaceId, averageTimes, horseRecords, openHorse, openResultImport, setScreen: navigate, goBack, goHome }),
-        screen === "races" && h(RegisteredRaceList, { raceCards, openRaceDetail }),
+        screen === "races" && h(RegisteredRaceList, { raceCards, openRaceDetail, setScreen: navigate }),
         screen === "deleteResults" && h(RaceResultDeleteScreen, { raceCards, horseRecords, onDeleteResult: deleteRaceResultByRaceId }),
         screen === "average" && h(AverageTimesScreen, { averageTimes }),
         screen === "diagnostic" && h(DataDiagnosticScreen, { setScreen: navigate }),
@@ -2587,9 +2603,9 @@ export function createKeibaApp(React, icons) {
       ["averageTimes", diagnostics.averageTimes],
       ["読み込み不可データ", diagnostics.unreadable],
       ["隔離データ", diagnostics.quarantined],
-      ["brokenWeeklyRaces", diagnostics.brokenWeeklyRaces],
-      ["brokenRaceEntries", diagnostics.brokenRaceEntries],
-      ["brokenRaceResults", diagnostics.brokenRaceResults],
+      ["brokenWeeklyRaces", isolatedBrokenMessage(diagnostics.brokenWeeklyRaces)],
+      ["brokenRaceEntries", isolatedBrokenMessage(diagnostics.brokenRaceEntries)],
+      ["brokenRaceResults", isolatedBrokenMessage(diagnostics.brokenRaceResults)],
     ];
     return h("section", { className: "screen backup-screen" },
       h("div", { className: "backup-panel" },
@@ -2644,8 +2660,9 @@ export function createKeibaApp(React, icons) {
     );
   }
 
-  function RegisteredRaceList({ raceCards, openRaceDetail }) {
+  function RegisteredRaceList({ raceCards, openRaceDetail, setScreen }) {
     const [openDateKey, setOpenDateKey] = useState("");
+    try {
     const allRaceCards = getAllRaceCards();
     const displayRaceCards = sortRaceCardsRecent(allRaceCards.length > 0 ? allRaceCards : raceCards);
     const dateGroups = groupRaceCardsByDate(displayRaceCards);
@@ -2668,6 +2685,20 @@ export function createKeibaApp(React, icons) {
           );
         }))
     );
+    } catch (error) {
+      console.error("Registered race list render failed", error);
+      return h("section", { className: "screen" },
+        h("div", { className: "error-panel" },
+          h("h2", null, "登録済みレース一覧の表示中に問題が発生しました。"),
+          h("p", null, "保存データは削除されていません。ホームへ戻るか、データ診断で状態を確認できます。"),
+          h("div", { className: "recovery-actions" },
+            h("button", { type: "button", className: "primary full-button", onClick: () => setScreen("home") }, "ホームへ戻る"),
+            h("button", { type: "button", className: "secondary full-button", onClick: () => setScreen("diagnostic") }, "データ診断を見る"),
+            h("button", { type: "button", className: "secondary full-button", onClick: safeExportAllLocalStorage }, "バックアップを書き出す")
+          )
+        )
+      );
+    }
   }
 
   function RaceListItem({ race, horseRecords = [], onOpen }) {
