@@ -2496,6 +2496,19 @@ textarea:focus {
   line-height: 1.55;
 }
 
+.import-format-label {
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  margin: 8px 0;
+  padding: 6px 10px;
+  border-radius: 999px;
+  background: #eef4ef;
+  color: #2f655b;
+  font-size: 0.88rem;
+  font-weight: 700;
+}
+
 @media (max-width: 520px) {
   .topbar {
     padding-top: max(12px, env(safe-area-inset-top));

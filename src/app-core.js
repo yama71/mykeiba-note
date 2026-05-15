@@ -374,6 +374,9 @@ function findAverageTime(averageTimes, condition = {}) {
 
 function parseRaceEntries(text) {
   const lines = text.split(/\r?\n/).map(normalizeRaceTextLine).filter(Boolean);
+  const netkeibaRows = parseNetkeibaRaceEntries(lines);
+  if (netkeibaRows.length > 0) return applyJraFrameAssignment(netkeibaRows);
+
   const rows = [];
   let pendingNumbers = [];
 
@@ -410,6 +413,46 @@ function parseRaceEntries(text) {
     .map(parseLegacyRaceLine)
     .filter(Boolean);
   return legacyRows.length > 0 ? applyJraFrameAssignment(legacyRows) : [makeUnparsedRow(text.trim())];
+}
+
+function parseNetkeibaRaceEntries(lines) {
+  const hasNetkeibaMarker = safeArray(lines).filter((line) => line.includes("のデータベース")).length >= 1;
+  if (!hasNetkeibaMarker) return [];
+  const rows = [];
+  for (let index = 0; index < lines.length; index += 1) {
+    const horseNumberLine = String(lines[index] || "").trim();
+    if (!/^\d{1,2}$/.test(horseNumberLine)) continue;
+    const scope = lines.slice(index + 1, index + 8);
+    const detailLine = scope.find((line) => /のデータベース/.test(line) && /(牡|牝|せん|セン|騙)\d{1,2}/.test(line));
+    if (!detailLine) continue;
+    const nameLine = scope.find((line) => {
+      const value = String(line || "").trim();
+      return value
+        && !/^\d{1,2}$/.test(value)
+        && !/^\d+(?:\.\d+)?$/.test(value)
+        && !/\d+人気/.test(value)
+        && !/^\([+-]?\d+\)$/.test(value)
+        && !/のデータベース/.test(value);
+    });
+    const detail = detailLine.match(/((?:牡|牝|せん|セン|騙)\d{1,2})\s+(.+?)のデータベース\s+(.+?)\s+(\d{2}(?:\.\d)?)/);
+    if (!detail) continue;
+    const popularityLine = scope.find((line) => /\d{1,2}人気/.test(line)) || "";
+    const popularity = popularityLine.match(/(\d{1,2})人気/)?.[1] || "";
+    rows.push({
+      id: crypto.randomUUID(),
+      frameNumber: "",
+      horseNumber: horseNumberLine,
+      horseName: (nameLine || detail[2] || "").trim(),
+      sexAge: detail[1].trim(),
+      popularity,
+      jockey: detail[3].replace(/^[▲△☆◇★]\s*/, "").trim(),
+      carriedWeight: detail[4],
+      raw: [horseNumberLine, nameLine, detailLine, popularityLine].filter(Boolean).join(" / "),
+      parsed: true,
+      importSource: "netkeiba形式",
+    });
+  }
+  return rows;
 }
 
 function normalizeRaceTextLine(line) {
@@ -2490,6 +2533,7 @@ export function createKeibaApp(React, icons) {
     const [saveMessage, setSaveMessage] = useState("");
     const [saveDebug, setSaveDebug] = useState({ beforeCount: loadJson(RACE_STORAGE_KEY).length, afterCount: loadJson(RACE_STORAGE_KEY).length, raceId: "", status: "未保存" });
     const [showPreview, setShowPreview] = useState(false);
+    const [importFormat, setImportFormat] = useState("");
     const safeEntries = safeArray(entries).map(sanitizeRaceEntry);
     const validEntryCount = safeEntries.filter((entry) => normalizeHorseName(entry.horseName)).length;
     const unparsedEntryCount = Math.max(0, safeEntries.length - validEntryCount);
@@ -2509,6 +2553,7 @@ export function createKeibaApp(React, icons) {
     function analyze() {
       const parsedEntries = parseRaceEntries(pasteText);
       setEntries(parsedEntries);
+      setImportFormat(parsedEntries.some((entry) => entry.importSource === "netkeiba形式") ? "netkeiba形式" : (parsedEntries.some((entry) => entry.parsed) ? "JRA公式形式" : "未判定"));
       const validCount = parsedEntries.filter((entry) => normalizeHorseName(entry.horseName)).length;
       const skippedCount = Math.max(0, parsedEntries.length - validCount);
       setWarning(parsedEntries.length === 0
@@ -2590,6 +2635,7 @@ export function createKeibaApp(React, icons) {
       h(SectionTitle, { icon: h(ClipboardList, { size: 18 }), title: `抽出結果 ${entries.length}頭` }),
       warning && h("div", { className: "warning-panel" }, warning),
       saveMessage && h("div", { className: "success-panel" }, saveMessage),
+      importFormat && h("p", { className: "import-format-label" }, `解析形式：${importFormat}`),
       h("div", { className: "form-actions inline-actions" },
         h("button", { type: "button", className: "secondary", onClick: () => setShowPreview((current) => !current) }, "保存予定データを確認")
       ),
@@ -2599,6 +2645,7 @@ export function createKeibaApp(React, icons) {
         rows: safeEntries,
         validCount: validEntryCount,
         unparsedCount: unparsedEntryCount,
+        importFormat,
       }),
       entries.length === 0
         ? h(EmptyState, { title: "まだ解析結果がありません", text: "出走表テキストを貼り付けて解析してください。" })
@@ -3357,7 +3404,7 @@ export function createKeibaApp(React, icons) {
       note && h("p", null, note)
     );
   }
-  function RegistrationPreview({ title, raceInfo, rows, validCount, unparsedCount, resultMeta }) {
+  function RegistrationPreview({ title, raceInfo, rows, validCount, unparsedCount, resultMeta, importFormat = "" }) {
     const info = sanitizeRaceInfo(raceInfo);
     const isRaceEntryPreview = title.includes("出走表");
     const storagePreview = isRaceEntryPreview
@@ -3420,6 +3467,7 @@ export function createKeibaApp(React, icons) {
 
     return h("section", { className: "preview-panel" },
       h("h3", null, title),
+      importFormat && h("p", { className: "import-format-label" }, `解析形式：${importFormat}`),
       h("div", { className: "preview-stats" },
         h("span", null, `登録予定: ${validCount}件`),
         h("span", null, `未解析: ${unparsedCount}件`),
@@ -3751,9 +3799,10 @@ export function createKeibaApp(React, icons) {
         h(Field, { label: "レース名" }, h("input", { value: draft.raceName || "", onChange: (event) => updateDraft("raceName", event.target.value) }))
       ),
       h(Field, { label: "メモ本文" }, h("textarea", { value: draft.memo || "", onChange: (event) => updateDraft("memo", event.target.value), rows: 5, placeholder: "見返した内容、次走で気をつけたいこと" })),
-      h(TagPicker, { title: "不利・内容タグ", tags: allTags, selected: safeArray(draft.tags), onChange: (tags) => updateDraft("tags", tags) }),
+
       h("button", { type: "button", className: "secondary full-button", onClick: () => setShowDistanceLoss(true) }, "\u8ddd\u96e2\u30ed\u30b9\u65e9\u898b\u8868\u3092\u898b\u308b"),
       showDistanceLoss && h(DistanceLossModal, { onClose: () => setShowDistanceLoss(false) }),
+     h(TagPicker, { title: "不利・内容タグ", tags: allTags, selected: safeArray(draft.tags), onChange: (tags) => updateDraft("tags", tags) }),
       h("div", { className: "custom-tag-row" }, h("input", { value: customTag, onChange: (event) => setCustomTag(event.target.value), placeholder: "自由タグ" }), h("button", { type: "button", className: "secondary", onClick: addCustomTag }, "追加")),
       h("section", { className: "choice-panel" },
         h("p", { className: "field-label" }, "評価"),
