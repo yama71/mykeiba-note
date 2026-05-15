@@ -923,6 +923,8 @@ function buildRaceResult(rows, averageWinningTime, sourceText = "", raceInfo = {
   }));
   const sortedRows = [...safeRows].sort((a, b) => Number(a.finish || 999) - Number(b.finish || 999));
   const winningTime = sortedRows[0]?.time || "";
+  const paceBias = judgePaceBias(safeRows);
+  const trackTrend = judgeTrackTrend(winningTime, averageWinningTime);
   return {
     status: "result_registered",
     rows: safeRows,
@@ -944,8 +946,11 @@ function buildRaceResult(rows, averageWinningTime, sourceText = "", raceInfo = {
     cornerPassages: meta.cornerPassages,
     averageWinningTime: averageWinningTime || "",
     winningTime,
-    paceBias: judgePaceBias(safeRows),
-    trackTrend: judgeTrackTrend(winningTime, averageWinningTime),
+    paceBias,
+    trackTrend,
+    paceBiasLabel: paceBias,
+    trackBiasLabel: trackTrend,
+    biasNote: "断定ではなく、レース回顧のための補助判断です。",
     registeredAt: new Date().toISOString(),
     savedAt: new Date().toISOString(),
   };
@@ -1085,6 +1090,9 @@ function sanitizeRaceCard(race = {}) {
     winningTime: rawResult.winningTime || "",
     paceBias: rawResult.paceBias || "判定材料不足",
     trackTrend: rawResult.trackTrend || "平均勝ち時計を入力すると補助判定できます",
+    paceBiasLabel: rawResult.paceBiasLabel || rawResult.paceBias || "",
+    trackBiasLabel: rawResult.trackBiasLabel || rawResult.trackTrend || "",
+    biasNote: rawResult.biasNote || "",
   } : null;
   const status = result ? "result_registered" : (race.status || (entries.length > 0 ? "entry_registered" : ""));
   return {
@@ -1578,6 +1586,10 @@ function isolatedBrokenMessage(count) {
 
 function normalizeHorseName(value) {
   return (value || "").trim();
+}
+
+function normalizeRating(value) {
+  return ["A", "B", "C"].includes(value) ? value : "C";
 }
 
 function recordKey(record) {
@@ -2185,12 +2197,12 @@ export function createKeibaApp(React, icons) {
         surface: note.surface || "",
         distance: note.distance || null,
         going: note.going || "",
-        attention: note.rating && note.rating !== "保留" ? note.rating : "C",
+        attention: ["A", "B", "C"].includes(note.rating) ? note.rating : "C",
         tags: safeArray(note.tags),
         troubleTags: safeArray(note.troubleTags || note.tags),
         strongTags: safeArray(note.strongTags),
         buyTags: safeArray(note.buyTags),
-        rating: note.rating || "保留",
+        rating: ["A", "B", "C"].includes(note.rating) ? note.rating : "C",
         nextRunNote: note.nextRunNote || "",
         memo: note.memo || "",
         createdAt: note.createdAt || now,
@@ -2553,8 +2565,7 @@ export function createKeibaApp(React, icons) {
         h(Field, { label: "競馬場" }, h("select", { value: raceInfo.track, onChange: (event) => updateInfo("track", event.target.value) }, tracks.map((track) => h("option", { key: track }, track))))
       ),
       h("div", { className: "two-col" },
-        h(Field, { label: "レース番号", required: true }, h("input", { inputMode: "numeric", value: raceInfo.raceNumber, onChange: (event) => updateInfo("raceNumber", event.target.value), placeholder: "11" })),
-        h(Field, { label: "発走時刻" }, h("input", { value: raceInfo.raceTime, onChange: (event) => updateInfo("raceTime", event.target.value), placeholder: "15:40" }))
+        h(Field, { label: "レース番号", required: true }, h("input", { inputMode: "numeric", value: raceInfo.raceNumber, onChange: (event) => updateInfo("raceNumber", event.target.value), placeholder: "11" }))
       ),
       h(Field, { label: "レース名" }, h("input", { value: raceInfo.raceName, onChange: (event) => updateInfo("raceName", event.target.value), placeholder: "例：○○ステークス" })),
       h("div", { className: "three-col" },
@@ -2950,7 +2961,7 @@ export function createKeibaApp(React, icons) {
                 h("span", { className: "compact-race-main" },
                   h("strong", null, `${race.racecourse}${raceNumberLabel(race.raceNumber)} ${race.raceName}`),
                   h("span", null, [
-                    race.startTime,
+
                     `${race.surface || ""}${race.distance || ""}${race.distance ? "m" : ""}`,
                     `${race.entriesCount}頭`,
                     race.raceClass,
@@ -3031,7 +3042,7 @@ export function createKeibaApp(React, icons) {
       h("span", { className: "compact-race-main" },
         h("strong", null, `${info.raceDate || "-"} ${info.track || "-"}${raceNumberLabel(info.raceNumber)} ${info.raceName || "レース名未入力"}`),
         h("span", null, [
-          info.raceTime,
+
           `${info.surface || ""}${info.distance || "-"}m`,
           `${safeRace.entries.length}頭`,
           info.raceClass,
@@ -3078,8 +3089,11 @@ export function createKeibaApp(React, icons) {
         : h("p", null, "出走馬データはまだありません。")
     );
     const renderResultList = (rows, compact = false) => h("div", { className: compact ? "result-card-stack top3" : "result-card-stack" }, rows.map((row) => h(ResultHorseCard, { key: row.id || `${row.finish}-${row.horseName}`, row, compact, openHorse })));
+    const renderResultStatus = () => h("section", { className: "race-detail-panel result-status-panel" },
+      h("h3", null, "結果ステータス"),
+      h("strong", null, hasResult ? "結果：登録済み" : "結果：未登録")
+    );
     const raceConditionItems = [
-      info.raceTime,
       info.raceClass,
       `${info.surface || ""}${info.distance || "-"}m`,
       info.courseType,
@@ -3096,12 +3110,9 @@ export function createKeibaApp(React, icons) {
         h("h2", null, info.raceName || "レース名未入力"),
         h("div", { className: "race-detail-line" }, raceConditionItems.map((item) => h("span", { key: item }, item)))
       ),
-      h("section", { className: "race-detail-panel result-status-panel" },
-        h("h3", null, "結果ステータス"),
-        h("strong", null, hasResult ? "結果：登録済み" : "結果：未登録")
-      ),
       hasResult
         ? h(React.Fragment, null,
+          h(ResultBiasPanel, { result: resultMeta }),
           h("section", { className: "race-detail-panel" },
             h("h3", null, "結果サマリー"),
             top3.length ? renderResultList(top3, true) : h("p", null, "表示できる結果データがありません。")
@@ -3115,7 +3126,8 @@ export function createKeibaApp(React, icons) {
           ),
           showAllResults && h("section", { className: "race-detail-panel" }, h("h3", null, "全着順"), renderResultList(resultRows)),
           showEntries && renderEntries(),
-          renderAverage()
+          renderAverage(),
+          renderResultStatus()
         )
         : h(React.Fragment, null,
           h("div", { className: "race-detail-actions" },
@@ -3123,11 +3135,11 @@ export function createKeibaApp(React, icons) {
             h("button", { type: "button", className: "secondary", onClick: () => setScreen("add") }, "このレースの回顧メモを書く")
           ),
           renderEntries(),
-          renderAverage()
+          renderAverage(),
+          renderResultStatus()
         )
     );
   }
-
   function ResultHorseCard({ row, compact = false, openHorse }) {
     const safeRow = sanitizeResultRow(row);
     return h("button", { type: "button", className: `result-horse-card ${compact ? "compact" : ""}`, onClick: () => openHorse(safeRow.horseName || "") },
@@ -3324,13 +3336,27 @@ export function createKeibaApp(React, icons) {
   }
 
   function ResultSummary({ result }) {
+    const paceBias = result.paceBiasLabel || result.paceBias || "";
+    const trackBias = result.trackBiasLabel || result.trackTrend || "";
+    const note = result.biasNote || "断定ではなく、レース回顧のための補助判断です。";
     return h("section", { className: "result-summary" },
-      h("div", null, h("span", null, "脚質バイアス"), h("strong", null, result.paceBias)),
-      h("div", null, h("span", null, "馬場傾向"), h("strong", null, result.trackTrend)),
-      h("p", null, "断定ではなく、レース回顧のための補助判断です。")
+      h("div", null, h("span", null, "脚質バイアス"), h("strong", null, paceBias || "-")),
+      h("div", null, h("span", null, "馬場傾向"), h("strong", null, trackBias || "-")),
+      h("p", null, note)
     );
   }
 
+  function ResultBiasPanel({ result }) {
+    const paceBias = result?.paceBiasLabel || result?.paceBias || "";
+    const trackBias = result?.trackBiasLabel || result?.trackTrend || "";
+    const note = result?.biasNote || (paceBias || trackBias ? "断定ではなく、レース回顧のための補助判断です。" : "");
+    if (!paceBias && !trackBias) return null;
+    return h("section", { className: "race-detail-panel result-bias-panel" },
+      paceBias && h("div", null, h("span", null, "脚質バイアス"), h("strong", null, paceBias)),
+      trackBias && h("div", null, h("span", null, "馬場傾向"), h("strong", null, trackBias)),
+      note && h("p", null, note)
+    );
+  }
   function RegistrationPreview({ title, raceInfo, rows, validCount, unparsedCount, resultMeta }) {
     const info = sanitizeRaceInfo(raceInfo);
     const isRaceEntryPreview = title.includes("出走表");
@@ -3616,7 +3642,7 @@ export function createKeibaApp(React, icons) {
         going: seed.going || "",
         memo: seed.memo || "",
         tags: [...new Set(existingTags)].filter(Boolean),
-        rating: seed.rating || seed.attention || "保留",
+        rating: ["A", "B", "C"].includes(seed.rating || seed.attention) ? (seed.rating || seed.attention) : "C",
         nextRunNote: seed.nextRunNote || "",
         createdAt: seed.createdAt || "",
       };
@@ -3658,15 +3684,15 @@ export function createKeibaApp(React, icons) {
         h("div", { className: "horse-title horse-profile-title" },
           h("div", null,
             h("h2", null, normalizedName),
-            h("p", null, [sexAge, latestMemo ? `最新評価 ${latestMemo.rating || latestMemo.attention || "-"}` : ""].filter(Boolean).join(" / ") || "競走成績")
+        h("p", null, [sexAge, latestMemo ? `最新評価 ${normalizeRating(latestMemo.rating || latestMemo.attention)}` : ""].filter(Boolean).join(" / ") || "競走成績")
           ),
-          latestMemo && h("div", { className: `rank rank-${latestMemo.attention || latestMemo.rating || "C"}` }, latestMemo.rating || latestMemo.attention || "-")
+          latestMemo && h("div", { className: `rank rank-${normalizeRating(latestMemo.rating || latestMemo.attention)}` }, normalizeRating(latestMemo.rating || latestMemo.attention))
         ),
         h("div", { className: "horse-summary-grid" },
           h(Metric, { label: "成績数", value: records.length }),
           h(Metric, { label: "最高着順", value: bestFinish ? `${bestFinish}着` : "-" }),
           h(Metric, { label: "メモあり", value: history.length }),
-          h(Metric, { label: "最新評価", value: latestMemo?.rating || latestMemo?.attention || "-" })
+          h(Metric, { label: "最新評価", value: latestMemo ? normalizeRating(latestMemo.rating || latestMemo.attention) : "-" })
         ),
         h("div", { className: "recent-finishes" }, h("span", null, "直近5走"), h("strong", null, recentFinishes || "-")),
         h("div", { className: "tab-switch" },
@@ -3700,6 +3726,7 @@ export function createKeibaApp(React, icons) {
 
   function HorseNoteForm({ draft, updateDraft, submitNote, onCancel }) {
     const [customTag, setCustomTag] = useState("");
+    const [showDistanceLoss, setShowDistanceLoss] = useState(false);
     const allTags = [...new Set([...troubleTags, ...strongTags])];
     function addCustomTag() {
       const tag = customTag.trim();
@@ -3725,13 +3752,61 @@ export function createKeibaApp(React, icons) {
       ),
       h(Field, { label: "メモ本文" }, h("textarea", { value: draft.memo || "", onChange: (event) => updateDraft("memo", event.target.value), rows: 5, placeholder: "見返した内容、次走で気をつけたいこと" })),
       h(TagPicker, { title: "不利・内容タグ", tags: allTags, selected: safeArray(draft.tags), onChange: (tags) => updateDraft("tags", tags) }),
+      h("button", { type: "button", className: "secondary full-button", onClick: () => setShowDistanceLoss(true) }, "\u8ddd\u96e2\u30ed\u30b9\u65e9\u898b\u8868\u3092\u898b\u308b"),
+      showDistanceLoss && h(DistanceLossModal, { onClose: () => setShowDistanceLoss(false) }),
       h("div", { className: "custom-tag-row" }, h("input", { value: customTag, onChange: (event) => setCustomTag(event.target.value), placeholder: "自由タグ" }), h("button", { type: "button", className: "secondary", onClick: addCustomTag }, "追加")),
       h("section", { className: "choice-panel" },
         h("p", { className: "field-label" }, "評価"),
-        h("div", { className: "rating-grid" }, ["A", "B", "C", "保留"].map((rating) => h("button", { type: "button", key: rating, className: draft.rating === rating ? "selected" : "", onClick: () => updateDraft("rating", rating) }, rating)))
+        h("div", { className: "rating-grid" }, ["A", "B", "C"].map((rating) => h("button", { type: "button", key: rating, className: draft.rating === rating ? "selected" : "", onClick: () => updateDraft("rating", rating) }, rating)))
       ),
       h(Field, { label: "次走メモ" }, h("textarea", { value: draft.nextRunNote || "", onChange: (event) => updateDraft("nextRunNote", event.target.value), rows: 3, placeholder: "次走で買いたい条件など" })),
       h("div", { className: "form-actions" }, h("button", { type: "button", className: "secondary", onClick: onCancel }, "キャンセル"), h("button", { className: "primary", disabled: !String(draft.memo || "").trim() }, "保存"))
+    );
+  }
+
+  function DistanceLossModal({ onClose }) {
+    const halfRows = [
+      ["1m外", "3.14m", "1.3馬身", "0.21秒"],
+      ["2m外", "6.28m", "2.6馬身", "0.41秒"],
+      ["4m外", "12.5m", "5.2馬身", "0.83秒"],
+      ["6m外", "18.8m", "7.8馬身", "1.25秒"],
+    ];
+    const fullRows = [
+      ["1m外", "6.28m", "2.6馬身", "0.41秒"],
+      ["2m外", "12.5m", "5.2馬身", "0.83秒"],
+      ["4m外", "25.1m", "10.4馬身", "1.67秒"],
+      ["6m外", "37.6m", "15.7馬身", "2.51秒"],
+    ];
+    const renderTable = (title, rows) => h("section", { className: "distance-loss-table-wrap" },
+      h("h4", null, title),
+      h("table", { className: "distance-loss-table" },
+        h("thead", null, h("tr", null, [title, "距離ロス", "馬身", "ロスタイム"].map((head) => h("th", { key: head }, head)))),
+        h("tbody", null, rows.map((row) => h("tr", { key: row.join("-") }, row.map((cell) => h("td", { key: cell }, cell)))))
+      )
+    );
+    return h("div", { className: "modal-backdrop", role: "dialog", "aria-modal": true },
+      h("div", { className: "distance-loss-modal" },
+        h("div", { className: "modal-head" },
+          h("h3", null, "距離ロス早見表"),
+          h("button", { type: "button", className: "secondary small", onClick: onClose }, "閉じる")
+        ),
+        renderTable("半周", halfRows),
+        renderTable("1周", fullRows),
+        h("section", { className: "distance-loss-note" },
+          h("h4", null, "距離ロスの計算"),
+          [
+            "内ラチから1m外を半周走った場合の計算",
+            "【2m（直径に換算するため1m+1mになる）× 3.14（円周率）】÷ 2 = 3.14m",
+            "馬身に換算すると",
+            "1馬身 = 2.4m とする",
+            "3.14m ÷ 2.4m = 1.3馬身",
+            "タイムに換算すると",
+            "1馬身 = 0.16秒",
+            "1.3馬身 × 0.16秒 = 0.21秒",
+            "約0.2秒のロスがあったと見ることができる",
+          ].map((line) => h("p", { key: line }, line))
+        )
+      )
     );
   }
 
@@ -3742,7 +3817,7 @@ export function createKeibaApp(React, icons) {
     return h("article", { className: "horse-note-card" },
       h("div", { className: "horse-note-head" },
         h("strong", null, [memo.raceDate || memo.date, memo.track || memo.racecourse, raceNumberLabel(memo.raceNumber), memo.raceName].filter(Boolean).join(" ") || "単独メモ"),
-        h("span", { className: `rank mini-rank rank-${memo.rating || memo.attention || "C"}` }, memo.rating || memo.attention || "-")
+        h("span", { className: `rank mini-rank rank-${normalizeRating(memo.rating || memo.attention)}` }, normalizeRating(memo.rating || memo.attention))
       ),
       tags.length > 0 && h("div", { className: "tag-row compact-tags" }, tags.map((tag) => h("span", { key: tag }, tag))),
       body && h("p", { className: "memo-text" }, shortBody),

@@ -2405,6 +2405,97 @@ textarea:focus {
   }
 }
 
+.result-bias-panel {
+  display: grid;
+  gap: 8px;
+}
+
+.result-bias-panel div {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: baseline;
+}
+
+.result-bias-panel span {
+  color: #6e675c;
+  font-size: 0.86rem;
+}
+
+.result-bias-panel strong {
+  text-align: right;
+}
+
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 30;
+  display: grid;
+  place-items: center;
+  padding: 18px;
+  background: rgba(22, 20, 17, 0.42);
+}
+
+.distance-loss-modal {
+  width: min(100%, 640px);
+  max-height: min(84vh, 760px);
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  padding: 18px;
+  border-radius: 12px;
+  border: 1px solid rgba(70, 63, 50, 0.16);
+  background: #fffdf8;
+  box-shadow: 0 18px 48px rgba(25, 21, 15, 0.24);
+}
+
+.modal-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.modal-head h3,
+.distance-loss-table-wrap h4,
+.distance-loss-note h4 {
+  margin: 0;
+}
+
+.distance-loss-table-wrap {
+  margin-top: 14px;
+}
+
+.distance-loss-table {
+  width: 100%;
+  border-collapse: collapse;
+  overflow: hidden;
+  border-radius: 8px;
+  font-size: 0.9rem;
+}
+
+.distance-loss-table th,
+.distance-loss-table td {
+  padding: 9px 8px;
+  border: 1px solid #e4ded2;
+  text-align: left;
+}
+
+.distance-loss-table th {
+  background: #f2ecdf;
+  color: #4b4337;
+}
+
+.distance-loss-note {
+  margin-top: 16px;
+  color: #514a3e;
+}
+
+.distance-loss-note p {
+  margin: 7px 0;
+  line-height: 1.55;
+}
+
 @media (max-width: 520px) {
   .topbar {
     padding-top: max(12px, env(safe-area-inset-top));
