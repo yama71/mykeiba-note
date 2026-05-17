@@ -2475,6 +2475,23 @@ textarea:focus {
   font-weight: 800;
 }
 
+.race-list-row-with-actions {
+  display: grid;
+  gap: 6px;
+}
+
+.race-list-row-with-actions .danger-button.small {
+  justify-self: end;
+  min-height: 34px;
+  padding: 6px 10px;
+  font-size: 12px;
+}
+
+.danger-zone {
+  border-color: rgba(177, 54, 54, 0.28);
+  background: #fff7f4;
+}
+
 .toast {
   position: fixed;
   left: 50%;

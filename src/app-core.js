@@ -1230,11 +1230,12 @@ function sanitizeRaceCard(race = {}) {
 
 function toStorageRaceCard(race = {}) {
   const safeRace = sanitizeRaceCard(race);
-  const raceId = buildStableRaceId({
+  const stableRaceId = buildStableRaceId({
     date: safeRace.raceInfo.raceDate,
     racecourse: safeRace.raceInfo.track,
     raceNumber: safeRace.raceInfo.raceNumber,
   });
+  const raceId = safeRace.raceId || stableRaceId;
   const storageRace = {
     id: raceId,
     raceId,
@@ -1645,6 +1646,74 @@ function validateRaceCard(raceCard) {
   });
   race.entries = validEntries;
   return { race, errors };
+}
+
+function inspectRaceCardBeforeSave(raceCard, existingRaceCards = []) {
+  const race = sanitizeRaceCard(raceCard);
+  const entries = safeArray(race.entries);
+  const warnings = [];
+  const fatals = [];
+  const horseNumbers = entries.map((entry) => String(entry.horseNumber || "").trim()).filter(Boolean);
+  const duplicatedNumbers = [...new Set(horseNumbers.filter((number, index) => horseNumbers.indexOf(number) !== index))];
+  const missingNames = entries.map((entry, index) => normalizeHorseName(entry.horseName) ? null : index + 1).filter(Boolean);
+  const missingNumbers = entries.map((entry, index) => String(entry.horseNumber || "").trim() ? null : index + 1).filter(Boolean);
+  const missingSexAges = entries.map((entry, index) => String(entry.sexAge || "").trim() ? null : index + 1).filter(Boolean);
+  const missingJockeys = entries.map((entry, index) => String(entry.jockey || "").trim() ? null : index + 1).filter(Boolean);
+  const missingWeights = entries.map((entry, index) => String(entry.carriedWeight || entry.weight || "").trim() ? null : index + 1).filter(Boolean);
+  const missingPopularities = entries.map((entry, index) => String(entry.popularity || "").trim() ? null : index + 1).filter(Boolean);
+  const missingFrames = entries.map((entry, index) => String(entry.frameNumber || entry.frame || "").trim() ? null : index + 1).filter(Boolean);
+  const expectedNumbers = entries.length ? Array.from({ length: entries.length }, (_, index) => String(index + 1)) : [];
+  const absentExpectedNumbers = expectedNumbers.filter((number) => !horseNumbers.includes(number));
+  const raceId = race.raceId || race.id || buildStableRaceId(race.raceInfo || {});
+  const sameRace = safeArray(existingRaceCards).find((card) => {
+    const safe = sanitizeRaceCard(card);
+    const info = safe.raceInfo || {};
+    const target = race.raceInfo || {};
+    return safe.raceId === raceId
+      || (info.raceDate && target.raceDate && info.raceDate === target.raceDate
+        && info.track === target.track
+        && raceNumberLabel(info.raceNumber) === raceNumberLabel(target.raceNumber));
+  });
+
+  if (entries.length === 0) fatals.push("entries が0件です");
+  if (!raceId) fatals.push("raceId が作れません");
+  if (missingNames.length >= Math.max(1, Math.ceil(entries.length * 0.8))) fatals.push("馬名がほぼ取得できていません");
+  if (missingNumbers.length >= Math.max(1, Math.ceil(entries.length * 0.8))) fatals.push("馬番がほぼ取得できていません");
+  if (duplicatedNumbers.length) warnings.push(`馬番が重複しています：${duplicatedNumbers.join(", ")}`);
+  if (missingNames.length) warnings.push(`馬名が空の行があります：${missingNames.join(", ")}行目`);
+  if (absentExpectedNumbers.length) warnings.push(`登録予定頭数が${entries.length}頭ですが、馬番 ${absentExpectedNumbers.join(", ")} が見つかりません`);
+  if (missingSexAges.length) warnings.push(`性齢が空の馬があります：${missingSexAges.length}頭`);
+  if (missingJockeys.length) warnings.push(`騎手が空の馬があります：${missingJockeys.length}頭`);
+  if (missingWeights.length) warnings.push(`斤量が空の馬があります：${missingWeights.length}頭`);
+  if (missingPopularities.length) warnings.push(`人気が空の馬があります：${missingPopularities.length}頭`);
+  if (missingFrames.length) warnings.push(`枠番が空の馬があります：${missingFrames.length}頭`);
+  if (sameRace) warnings.push("同じ日付・競馬場・レース番号の出走表がすでに登録されています");
+  return { race, raceId, sameRace, warnings, fatals };
+}
+
+function inspectRaceResultBeforeSave(race, rows) {
+  const safeRows = safeArray(rows).map(sanitizeResultRow);
+  const warnings = [];
+  const fatals = [];
+  const finishes = safeRows.map((row) => String(row.finish || "").trim()).filter(Boolean);
+  const numbers = safeRows.map((row) => String(row.horseNumber || "").trim()).filter(Boolean);
+  const duplicatedFinishes = [...new Set(finishes.filter((value, index) => finishes.indexOf(value) !== index))];
+  const duplicatedNumbers = [...new Set(numbers.filter((value, index) => numbers.indexOf(value) !== index))];
+  const missingNames = safeRows.map((row, index) => normalizeHorseName(row.horseName) ? null : index + 1).filter(Boolean);
+  const missingTimes = safeRows.map((row, index) => String(row.time || "").trim() ? null : index + 1).filter(Boolean);
+  const entries = safeArray(race?.entries);
+  const entryNumbers = entries.map((entry) => String(entry.horseNumber || "").trim()).filter(Boolean);
+  const unknownNumbers = numbers.filter((number) => entryNumbers.length > 0 && !entryNumbers.includes(number));
+  if (!race) fatals.push("登録対象レースが選択されていません");
+  if (safeRows.length === 0) fatals.push("結果行が0件です");
+  if (missingNames.length >= Math.max(1, Math.ceil(safeRows.length * 0.8))) fatals.push("馬名がほぼ取得できていません");
+  if (duplicatedFinishes.length) warnings.push(`着順が重複しています：${duplicatedFinishes.join(", ")}`);
+  if (duplicatedNumbers.length) warnings.push(`馬番が重複しています：${duplicatedNumbers.join(", ")}`);
+  if (missingNames.length) warnings.push(`馬名が空の行があります：${missingNames.join(", ")}行目`);
+  if (missingTimes.length) warnings.push(`タイムが空の馬があります：${missingTimes.length}頭`);
+  if (unknownNumbers.length) warnings.push(`出走表に存在しない馬番が結果に含まれています：${[...new Set(unknownNumbers)].join(", ")}`);
+  if (race?.status === "result_registered" || race?.result) warnings.push("このレースはすでに結果登録済みです");
+  return { warnings, fatals };
 }
 
 function validateRaceResultInput(race, rows) {
@@ -2420,6 +2489,34 @@ export function createKeibaApp(React, icons) {
       }
     }
 
+    function deleteRaceEntryOnly(raceId) {
+      const normalizedRaceId = String(raceId || "").trim();
+      if (!normalizedRaceId) return { ok: false };
+      const allCards = getAllRaceCards();
+      const target = allCards.find((race) => race.id === normalizedRaceId || race.raceId === normalizedRaceId);
+      if (!target) return { ok: false };
+      const hasResultData = hasRaceResult(target, horseRecords);
+      const info = target.raceInfo || {};
+      const label = `${info.raceDate || ""} ${info.track || ""}${raceNumberLabel(info.raceNumber)} ${info.raceName || ""}`.trim();
+      const message = hasResultData
+        ? `このレースは結果登録済みです。\n\n${label}\n\n出走表だけを削除しても、結果・馬別成績・回顧メモは残ります。\n本当に出走表だけ削除しますか？\n\n不安な場合は、先にバックアップを書き出してください。`
+        : `この出走表を削除しますか？\n\n${label}\n\n出走馬情報は消えますが、すでに登録済みの結果・馬別成績・回顧メモは削除しません。\n不安な場合は、先にバックアップを書き出してください。`;
+      if (!window.confirm(message)) return { ok: false, cancelled: true };
+      const now = new Date().toISOString();
+      const nextCards = hasResultData
+        ? allCards.map((race) => {
+          const same = race.id === normalizedRaceId || race.raceId === normalizedRaceId;
+          if (!same) return race;
+          return sanitizeRaceCard({ ...race, entries: [], entryDeleted: true, updatedAt: now });
+        })
+        : allCards.filter((race) => race.id !== normalizedRaceId && race.raceId !== normalizedRaceId);
+      persistRaceCardsToStorage(nextCards);
+      setRaceCards(sanitizeRaceCards(nextCards));
+      notify(hasResultData ? "出走表だけ削除しました。結果は残っています。" : "出走表を削除しました。");
+      if (!hasResultData) setScreen("races");
+      return { ok: true, hasResult: hasResultData };
+    }
+
     function deleteMemo(id) {
       setMemos((current) => current.filter((memo) => memo.id !== id));
     }
@@ -2560,8 +2657,8 @@ export function createKeibaApp(React, icons) {
           screen === "add" && h(AddMemo, { onSave: addMemo, onCancel: goBack }),
           screen === "import" && h(RaceImport, { onSave: addRaceCard }),
           screen === "result" && h(ResultImport, { raceCards, horseRecords, selectedRaceId, averageTimes, onSave: saveRaceResult, openHorse }),
-        screen === "race" && h(RaceDetail, { raceCards, selectedRaceId, averageTimes, horseRecords, openHorse, openResultImport, setScreen: navigate, goBack, goHome }),
-        screen === "races" && h(RegisteredRaceList, { raceCards, averageTimes, horseRecords, openRaceDetail, setScreen: navigate }),
+        screen === "race" && h(RaceDetail, { raceCards, selectedRaceId, averageTimes, horseRecords, openHorse, openResultImport, setScreen: navigate, goBack, goHome, deleteRaceEntryOnly }),
+        screen === "races" && h(RegisteredRaceList, { raceCards, averageTimes, horseRecords, openRaceDetail, deleteRaceEntryOnly, setScreen: navigate }),
         screen === "prediction" && h(PredictionPage, { raceCards, horseRecords, openPredictionRace }),
         screen === "predictionRace" && h(PredictionRacePage, { selectedRaceId: selectedPredictionRaceId, raceCards, horseRecords, memos, openHorse, openRaceDetail }),
         screen === "deleteResults" && h(RaceResultDeleteScreen, { raceCards, horseRecords, onDeleteResult: deleteRaceResultByRaceId }),
@@ -2706,7 +2803,32 @@ export function createKeibaApp(React, icons) {
         setSaveDebug((current) => ({ ...current, status: "失敗" }));
         return;
       }
-      const result = onSave(validation.race);
+      const inspection = inspectRaceCardBeforeSave(validation.race, getAllRaceCards());
+      if (inspection.fatals.length > 0) {
+        setWarning(`登録できません：${inspection.fatals.join(" / ")}`);
+        setSaveMessage("");
+        setSaveDebug((current) => ({ ...current, status: "失敗" }));
+        return;
+      }
+      let raceToSave = validation.race;
+      if (inspection.sameRace) {
+        const choice = window.prompt(`同じレースの出走表がすでに登録されています。\n\n${inspection.warnings.join("\n")}\n\n入力してください：\n1 = キャンセル\n2 = 別データとして保存\n3 = 既存の出走表を上書き`, "3");
+        if (choice === "1" || choice == null) {
+          setWarning("登録をキャンセルしました。手修正画面に戻れます。");
+          return;
+        }
+        if (choice === "2") {
+          const suffix = `copy-${Date.now()}`;
+          raceToSave = sanitizeRaceCard({ ...validation.race, id: `${inspection.raceId}-${suffix}`, raceId: `${inspection.raceId}-${suffix}` });
+        }
+      } else if (inspection.warnings.length > 0) {
+        const confirmed = window.confirm(`登録予定データに確認が必要な項目があります。\n\n${inspection.warnings.join("\n")}\n\nそれでも登録しますか？\nキャンセルすると手修正画面に戻ります。`);
+        if (!confirmed) {
+          setWarning(inspection.warnings.join(" "));
+          return;
+        }
+      }
+      const result = onSave(raceToSave);
       if (!result?.ok) {
         setWarning(result?.message || "保存に失敗しました");
         setSaveMessage("");
@@ -2894,6 +3016,18 @@ export function createKeibaApp(React, icons) {
       if (validation.errors.length > 0) {
         setWarning(validation.errors.join(" "));
         return;
+      }
+      const inspection = inspectRaceResultBeforeSave(currentRace, validation.validRows);
+      if (inspection.fatals.length > 0) {
+        setWarning(`登録できません：${inspection.fatals.join(" / ")}`);
+        return;
+      }
+      if (inspection.warnings.length > 0) {
+        const confirmed = window.confirm(`結果登録データに確認が必要な項目があります。\n\n${inspection.warnings.join("\n")}\n\nそれでも登録しますか？\nキャンセルすると手修正画面に戻ります。`);
+        if (!confirmed) {
+          setWarning(inspection.warnings.join(" "));
+          return;
+        }
       }
       onSave(selectedValue, buildRaceResult(validation.validRows.map((row) => ({
         id: row.id,
@@ -3091,7 +3225,7 @@ export function createKeibaApp(React, icons) {
     );
   }
 
-  function RegisteredRaceList({ raceCards, averageTimes = [], horseRecords = [], openRaceDetail, setScreen }) {
+  function RegisteredRaceList({ raceCards, averageTimes = [], horseRecords = [], openRaceDetail, deleteRaceEntryOnly, setScreen }) {
     const [openDateKey, setOpenDateKey] = useState("");
     let debugDetails = { safeCount: 0, fallbackCount: safeArray(raceCards).length, displayCount: 0, groupCount: 0 };
     try {
@@ -3120,24 +3254,26 @@ export function createKeibaApp(React, icons) {
                 h("small", null, `対象：${summary.track}${summary.surface} ${summary.raceCount}レース`),
                 h("small", null, "映像ではなく、登録済みレースの勝ち時計・通過順位からの補助判断です。")
               ))),
-              isOpen && h("div", { className: "compact-race-list meeting-week-races" }, group.races.map((race) => h("button", {
-                key: race.raceId,
-                type: "button",
-                className: "compact-race-card",
-                onClick: () => openRaceDetail(race.raceId),
-              },
-                h("span", { className: "compact-race-main" },
-                  h("strong", null, `${race.racecourse}${raceNumberLabel(race.raceNumber)} ${race.raceName}`),
-                  h("span", null, [
+              isOpen && h("div", { className: "compact-race-list meeting-week-races" }, group.races.map((race) => h("div", { key: race.raceId, className: "race-list-row-with-actions" },
+                h("button", {
+                  type: "button",
+                  className: "compact-race-card",
+                  onClick: () => openRaceDetail(race.raceId),
+                },
+                  h("span", { className: "compact-race-main" },
+                    h("strong", null, `${race.racecourse}${raceNumberLabel(race.raceNumber)} ${race.raceName}`),
+                    h("span", null, [
 
-                    `${race.surface || ""}${race.distance || ""}${race.distance ? "m" : ""}`,
-                    `${race.entriesCount}頭`,
-                    race.raceClass,
-                    `結果：${race.resultStatusLabel}`,
-                  ].filter(Boolean).join(" / ")),
-                  race.winnerName && h("small", { className: "race-winner-line" }, `1着：${race.winnerName} ${race.winnerTime || ""}`)
+                      `${race.surface || ""}${race.distance || ""}${race.distance ? "m" : ""}`,
+                      `${race.entriesCount}頭`,
+                      race.raceClass,
+                      `結果：${race.resultStatusLabel}`,
+                    ].filter(Boolean).join(" / ")),
+                    race.winnerName && h("small", { className: "race-winner-line" }, `1着：${race.winnerName} ${race.winnerTime || ""}`)
+                  ),
+                  h("span", { className: "race-chevron", "aria-hidden": true }, ">")
                 ),
-                h("span", { className: "race-chevron", "aria-hidden": true }, ">")
+                race.entriesCount > 0 && deleteRaceEntryOnly && h("button", { type: "button", className: "danger-button ghost small", onClick: () => deleteRaceEntryOnly(race.raceId) }, "出走表だけ削除")
               )))
             );
           }))
@@ -3222,7 +3358,7 @@ export function createKeibaApp(React, icons) {
     );
   }
 
-  function RaceDetail({ raceCards, selectedRaceId, averageTimes, horseRecords = [], openHorse, openResultImport, setScreen, goBack, goHome }) {
+  function RaceDetail({ raceCards, selectedRaceId, averageTimes, horseRecords = [], openHorse, openResultImport, setScreen, goBack, goHome, deleteRaceEntryOnly }) {
     const [showAllResults, setShowAllResults] = useState(false);
     const [showEntries, setShowEntries] = useState(false);
     const storedRaceCards = getAllRaceCards();
@@ -3254,7 +3390,7 @@ export function createKeibaApp(React, icons) {
           latestMemo: null,
           onOpen: () => openHorse(entry.horseName || ""),
         })))
-        : h("p", null, "出走馬データはまだありません。")
+        : h("p", null, race.entryDeleted ? "出走表は削除済みです。" : "出走馬データはまだありません。")
     );
     const renderResultList = (rows, compact = false) => h("div", { className: compact ? "result-card-stack top3" : "result-card-stack" }, rows.map((row) => h(ResultHorseCard, { key: row.id || `${row.finish}-${row.horseName}`, row, compact, openHorse })));
     const renderResultStatus = () => h("section", { className: "race-detail-panel result-status-panel" },
@@ -3289,7 +3425,7 @@ export function createKeibaApp(React, icons) {
           h(CornerPassagePanel, { result: resultMeta }),
           h("div", { className: "race-detail-actions" },
             h("button", { type: "button", className: "secondary", onClick: () => setShowAllResults((current) => !current) }, showAllResults ? "全着順を閉じる" : "全着順を見る"),
-            h("button", { type: "button", className: "secondary", onClick: () => setShowEntries((current) => !current) }, showEntries ? "出走表を閉じる" : "出走表を見る"),
+            entries.length > 0 ? h("button", { type: "button", className: "secondary", onClick: () => setShowEntries((current) => !current) }, showEntries ? "出走表を閉じる" : "出走表を見る") : h("span", { className: "muted-mini" }, "出走表は削除済み"),
             h("button", { type: "button", className: "secondary", onClick: () => setScreen("add") }, "このレースの回顧メモを書く")
           ),
           showAllResults && h("section", { className: "race-detail-panel" }, h("h3", null, "全着順"), renderResultList(resultRows)),
@@ -3305,7 +3441,12 @@ export function createKeibaApp(React, icons) {
           renderEntries(),
           renderAverage(),
           renderResultStatus()
-        )
+        ),
+      entries.length > 0 && deleteRaceEntryOnly && h("section", { className: "race-detail-panel danger-zone" },
+        h("h3", null, "出走表管理"),
+        h("p", null, "出走表だけを削除します。結果・馬別成績・回顧メモは削除しません。"),
+        h("button", { type: "button", className: "danger-button full-button", onClick: () => deleteRaceEntryOnly(race.raceId || race.id) }, "出走表だけ削除")
+      )
     );
   }
   function ResultHorseCard({ row, compact = false, openHorse }) {
