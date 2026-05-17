@@ -14,12 +14,14 @@ const LAST_RACE_SAVE_DEBUG_KEY = "keiba-last-race-save-debug-v1";
 const REGISTERED_RACE_LIST_ERROR_KEY = "keiba-registered-race-list-error-v1";
 const PACE_NOTES_STORAGE_KEY = "keiba-pace-prediction-notes-v1";
 const FACTOR_NOTES_STORAGE_KEY = "keiba-prediction-factor-notes-v1";
+const TRACK_BIAS_NOTES_STORAGE_KEY = "keiba-track-bias-v1";
 const BACKUP_VERSION = 1;
 const STORAGE_ALIASES = {
   horseNotes: MEMO_STORAGE_KEY,
   horseRecords: HORSE_RECORDS_STORAGE_KEY,
   pacePredictionNotes: PACE_NOTES_STORAGE_KEY,
   predictionFactorNotes: FACTOR_NOTES_STORAGE_KEY,
+  trackBiasNotes: TRACK_BIAS_NOTES_STORAGE_KEY,
   weeklyRaces: WEEKLY_RACES_COMPAT_KEY,
   raceEntries: RACE_ENTRIES_COMPAT_KEY,
   raceResults: RACE_STORAGE_KEY,
@@ -155,6 +157,7 @@ const APP_STORAGE_KEYS = [
   AVERAGE_TIMES_STORAGE_KEY,
   PACE_NOTES_STORAGE_KEY,
   FACTOR_NOTES_STORAGE_KEY,
+  TRACK_BIAS_NOTES_STORAGE_KEY,
   BROKEN_WEEKLY_RACES_KEY,
   BROKEN_RACE_ENTRIES_KEY,
   BROKEN_RACE_RESULTS_KEY,
@@ -2396,6 +2399,191 @@ function extractDistanceNumber(value) {
   return Number.isFinite(number) ? number : 0;
 }
 
+function dateKeyToIso(value) {
+  const key = getDateKeySafe(value);
+  if (!key || key === "日付未設定") return "";
+  const matched = key.match(/(\d{4})\/(\d{2})\/(\d{2})/);
+  return matched ? `${matched[1]}-${matched[2]}-${matched[3]}` : "";
+}
+
+function shiftIsoDate(value, days) {
+  const iso = dateKeyToIso(value);
+  if (!iso) return "";
+  const date = new Date(`${iso}T00:00:00`);
+  if (Number.isNaN(date.getTime())) return "";
+  date.setDate(date.getDate() + days);
+  return date.toISOString().slice(0, 10);
+}
+
+function trackBiasNoteKey(note = {}) {
+  return [
+    safeString(note.date || ""),
+    safeString(note.racecourse || ""),
+    normalizeSurfaceLabel(note.surface || ""),
+    safeString(note.raceId || ""),
+    safeString(note.horseNumber || ""),
+    safeString(note.finishPosition || ""),
+  ].join("__");
+}
+
+function normalizeTrackBiasNote(note = {}) {
+  const normalized = {
+    id: note.id || trackBiasNoteKey(note),
+    date: dateKeyToIso(note.date) || safeString(note.date || ""),
+    racecourse: safeString(note.racecourse || ""),
+    surface: normalizeSurfaceLabel(note.surface || ""),
+    raceId: safeString(note.raceId || ""),
+    horseNumber: safeString(note.horseNumber || ""),
+    horseName: normalizeHorseName(note.horseName || ""),
+    finishPosition: safeString(note.finishPosition || ""),
+    coursePath: ["内", "中", "外", "不明"].includes(note.coursePath) ? note.coursePath : "不明",
+    runningStyle: ["逃げ", "先行", "好位差し", "差し", "追込", "不明"].includes(note.runningStyle) ? note.runningStyle : "不明",
+    createdAt: note.createdAt || "",
+    updatedAt: note.updatedAt || "",
+  };
+  return { ...normalized, id: normalized.id || trackBiasNoteKey(normalized) };
+}
+
+function getTrackBiasNote(notes, race, row) {
+  const safeRace = sanitizeRaceCard(race);
+  const info = safeRace.raceInfo || {};
+  const base = {
+    date: info.raceDate || "",
+    racecourse: info.track || "",
+    surface: info.surface || "",
+    raceId: safeRace.raceId || safeRace.id || "",
+    horseNumber: row?.horseNumber || "",
+    horseName: row?.horseName || "",
+    finishPosition: row?.finish || "",
+  };
+  const key = trackBiasNoteKey(base);
+  return normalizeTrackBiasNote(safeArray(notes).find((note) => note.id === key)
+    || safeArray(notes).find((note) => note.raceId === base.raceId
+      && safeString(note.horseNumber) === safeString(base.horseNumber)
+      && safeString(note.finishPosition) === safeString(base.finishPosition))
+    || base);
+}
+
+function getTrackBiasReferenceRaces(targetRace, raceCards = []) {
+  const target = sanitizeRaceCard(targetRace);
+  const info = target.raceInfo || {};
+  const targetDate = dateKeyToIso(info.raceDate);
+  const previousDate = shiftIsoDate(info.raceDate, -1);
+  const targetSurface = normalizeSurfaceLabel(info.surface || "");
+  const targetTrack = info.track || "";
+  const dateSet = new Set([previousDate, targetDate].filter(Boolean));
+  if (!targetDate || !targetTrack || !targetSurface) return [];
+  return safeArray(raceCards)
+    .map((race) => sanitizeRaceCard(race.raw || race))
+    .filter((race) => {
+      const raceInfo = race.raceInfo || {};
+      const raceDate = dateKeyToIso(raceInfo.raceDate);
+      return dateSet.has(raceDate)
+        && raceInfo.track === targetTrack
+        && normalizeSurfaceLabel(raceInfo.surface || "") === targetSurface;
+    })
+    .sort((a, b) =>
+      safeString(a.raceInfo?.raceDate).localeCompare(safeString(b.raceInfo?.raceDate))
+      || raceNumberValue(a) - raceNumberValue(b)
+    );
+}
+
+function buildTrackBiasReferenceRows(referenceRaces = [], horseRecords = []) {
+  return safeArray(referenceRaces).flatMap((race) => {
+    const rows = sortResultRows(resultRowsFromRace(race, horseRecords)).slice(0, 3);
+    return rows.map((row) => ({ race, row }));
+  });
+}
+
+function buildTrackBiasClockSummary(referenceRaces = [], averageTimes = [], horseRecords = []) {
+  const diffs = [];
+  safeArray(referenceRaces).forEach((race) => {
+    const safeRace = sanitizeRaceCard(race);
+    const info = safeRace.raceInfo || {};
+    const winner = sortResultRows(resultRowsFromRace(safeRace, horseRecords))[0];
+    const average = findAverageTime(averageTimes, info);
+    const winnerSeconds = winner?.time ? toSeconds(winner.time) : null;
+    const averageSeconds = average?.averageTime ? toSeconds(average.averageTime) : null;
+    if (winnerSeconds != null && averageSeconds != null) diffs.push(winnerSeconds - averageSeconds);
+  });
+  if (diffs.length === 0) return { tendency: "", label: "判定材料不足", averageDiff: null, count: 0 };
+  const averageDiff = diffs.reduce((sum, value) => sum + value, 0) / diffs.length;
+  if (averageDiff <= -1) return { tendency: "fast", label: `高速馬場（平均 ${averageDiff.toFixed(1)}秒）`, averageDiff, count: diffs.length };
+  if (averageDiff >= 1) return { tendency: "slow", label: `時計がかかる（平均 +${averageDiff.toFixed(1)}秒）`, averageDiff, count: diffs.length };
+  return { tendency: "standard", label: `標準（平均 ${averageDiff >= 0 ? "+" : ""}${averageDiff.toFixed(1)}秒）`, averageDiff, count: diffs.length };
+}
+
+function buildManualTrackBiasSummary(notes = [], referenceRows = []) {
+  const normalizedNotes = safeArray(notes).map(normalizeTrackBiasNote);
+  const matchedNotes = safeArray(referenceRows).map(({ race, row }) => getTrackBiasNote(normalizedNotes, race, row));
+  const pathValues = matchedNotes.map((note) => note.coursePath).filter((value) => value && value !== "不明");
+  const styleValues = matchedNotes.map((note) => note.runningStyle).filter((value) => value && value !== "不明");
+  const count = (values, targets) => values.filter((value) => targets.includes(value)).length;
+  const pathInner = count(pathValues, ["内"]);
+  const pathOuter = count(pathValues, ["外"]);
+  let pathTendency = "";
+  let pathLabel = "判定材料不足";
+  if (pathValues.length >= 3) {
+    if (pathInner / pathValues.length >= 0.5) {
+      pathTendency = "inner";
+      pathLabel = `内有利（内 ${pathInner} / 入力済み ${pathValues.length}）`;
+    } else if (pathOuter / pathValues.length >= 0.5) {
+      pathTendency = "outer";
+      pathLabel = `外伸び（外 ${pathOuter} / 入力済み ${pathValues.length}）`;
+    } else {
+      pathTendency = "flat";
+      pathLabel = "フラット";
+    }
+  }
+
+  const styleFront = count(styleValues, ["逃げ", "先行"]);
+  const styleCloser = count(styleValues, ["差し", "追込"]);
+  let styleTendency = "";
+  let styleLabel = "判定材料不足";
+  if (styleValues.length >= 3) {
+    if (styleFront / styleValues.length >= 0.5) {
+      styleTendency = "front";
+      styleLabel = `先行有利（先行系 ${styleFront} / 入力済み ${styleValues.length}）`;
+    } else if (styleCloser / styleValues.length >= 0.5) {
+      styleTendency = "closer";
+      styleLabel = `差し有利（差し系 ${styleCloser} / 入力済み ${styleValues.length}）`;
+    } else {
+      styleTendency = "flat";
+      styleLabel = "フラット";
+    }
+  }
+  return {
+    notes: matchedNotes,
+    inputCount: matchedNotes.filter((note) => note.coursePath !== "不明" || note.runningStyle !== "不明").length,
+    pathInputCount: pathValues.length,
+    styleInputCount: styleValues.length,
+    pathTendency,
+    pathLabel,
+    styleTendency,
+    styleLabel,
+  };
+}
+
+function buildTrackBiasSummaryForRace(race, raceCards = [], averageTimes = [], horseRecords = [], trackBiasNotes = []) {
+  const safeRace = sanitizeRaceCard(race);
+  const info = safeRace.raceInfo || {};
+  const referenceRaces = getTrackBiasReferenceRaces(safeRace, raceCards);
+  const referenceRows = buildTrackBiasReferenceRows(referenceRaces, horseRecords);
+  const clock = buildTrackBiasClockSummary(referenceRaces, averageTimes, horseRecords);
+  const manual = buildManualTrackBiasSummary(trackBiasNotes, referenceRows);
+  return {
+    race: safeRace,
+    track: info.track || "",
+    surface: normalizeSurfaceLabel(info.surface || ""),
+    referenceRaces,
+    referenceRows,
+    clock,
+    manual,
+    targetRaceCount: referenceRaces.length,
+    inputCount: manual.inputCount,
+  };
+}
+
 function detectRaceTendency(race, sameDateRaces = [], averageTimes = [], horseRecords = []) {
   const resultText = [
     race?.result?.trackBiasLabel,
@@ -2418,7 +2606,7 @@ function detectRaceTendency(race, sameDateRaces = [], averageTimes = [], horseRe
   return "";
 }
 
-function getImportantFactorGroupsForRace(race, raceCards = [], averageTimes = [], horseRecords = []) {
+function getImportantFactorGroupsForRace(race, raceCards = [], averageTimes = [], horseRecords = [], trackBiasNotes = []) {
   const safeRace = sanitizeRaceCard(race);
   const info = safeRace.raceInfo || {};
   const track = info.track || "";
@@ -2428,11 +2616,19 @@ function getImportantFactorGroupsForRace(race, raceCards = [], averageTimes = []
     const cardInfo = sanitizeRaceCard(card).raceInfo || {};
     return cardInfo.raceDate && info.raceDate && cardInfo.raceDate === info.raceDate;
   });
-  const tendency = detectRaceTendency(safeRace, sameDateRaces, averageTimes, horseRecords);
   const candidates = importantFactorRules.filter((rule) => rule.track === track
     && rule.surface === surface
     && safeArray(rule.distances).includes(distance));
   if (candidates.length === 0) return { label: `${track}${surface}${distance || ""}${distance ? "m" : ""}`, tendency: "", groups: [] };
+  const trackBiasSummary = buildTrackBiasSummaryForRace(safeRace, raceCards, averageTimes, horseRecords, trackBiasNotes);
+  const candidateTendencies = new Set(candidates.map((rule) => rule.tendency).filter(Boolean));
+  let tendency = detectRaceTendency(safeRace, sameDateRaces, averageTimes, horseRecords);
+  if ((candidateTendencies.has("fast") || candidateTendencies.has("slow")) && ["fast", "slow"].includes(trackBiasSummary.clock.tendency)) {
+    tendency = trackBiasSummary.clock.tendency;
+  }
+  if ((candidateTendencies.has("inner") || candidateTendencies.has("outer")) && ["inner", "outer"].includes(trackBiasSummary.manual.pathTendency)) {
+    tendency = trackBiasSummary.manual.pathTendency;
+  }
   const exact = candidates.filter((rule) => !rule.tendency || rule.tendency === tendency);
   const groups = exact.length > 0 ? exact : candidates;
   return {
@@ -2440,6 +2636,7 @@ function getImportantFactorGroupsForRace(race, raceCards = [], averageTimes = []
     tendency,
     groups,
     unresolvedTendency: candidates.some((rule) => rule.tendency) && !tendency,
+    trackBiasSummary,
   };
 }
 
@@ -2760,6 +2957,7 @@ export function createKeibaApp(React, icons) {
     const [selectedPredictionRaceId, setSelectedPredictionRaceId] = useState("");
     const [paceNotes, setPaceNotes] = useState(() => loadJson(PACE_NOTES_STORAGE_KEY).map(normalizePaceNote));
     const [factorNotes, setFactorNotes] = useState(() => loadJson(FACTOR_NOTES_STORAGE_KEY).map(normalizeFactorNote));
+    const [trackBiasNotes, setTrackBiasNotes] = useState(() => loadJson(TRACK_BIAS_NOTES_STORAGE_KEY).map(normalizeTrackBiasNote));
     const [navigationHistory, setNavigationHistory] = useState([]);
     const [toast, setToast] = useState("");
 
@@ -2780,6 +2978,7 @@ export function createKeibaApp(React, icons) {
     useEffect(() => saveJson(AVERAGE_TIMES_STORAGE_KEY, averageTimes), [averageTimes]);
     useEffect(() => saveJson(PACE_NOTES_STORAGE_KEY, safeArray(paceNotes).map(normalizePaceNote)), [paceNotes]);
     useEffect(() => saveJson(FACTOR_NOTES_STORAGE_KEY, safeArray(factorNotes).map(normalizeFactorNote)), [factorNotes]);
+    useEffect(() => saveJson(TRACK_BIAS_NOTES_STORAGE_KEY, safeArray(trackBiasNotes).map(normalizeTrackBiasNote)), [trackBiasNotes]);
 
     const horseStats = useMemo(() => {
       const map = new Map();
@@ -3099,6 +3298,11 @@ export function createKeibaApp(React, icons) {
       navigate("importantFactors");
     }
 
+    function openTrackBias(raceId) {
+      setSelectedPredictionRaceId(raceId);
+      navigate("trackBias");
+    }
+
     function savePacePredictionNote(raceId, entry, patch) {
       const now = new Date().toISOString();
       const key = paceNoteKey(raceId, entry);
@@ -3138,6 +3342,14 @@ export function createKeibaApp(React, icons) {
       });
     }
 
+    function saveTrackBiasNote(patch) {
+      const now = new Date().toISOString();
+      const base = normalizeTrackBiasNote({ ...patch, updatedAt: now, createdAt: patch.createdAt || now });
+      const key = trackBiasNoteKey(base);
+      const nextNote = normalizeTrackBiasNote({ ...base, id: key });
+      setTrackBiasNotes((current) => [nextNote, ...safeArray(current).filter((note) => note.id !== key)]);
+    }
+
     function openHorse(horseName) {
       setSelectedHorse(normalizeHorseName(horseName));
       navigate("horse");
@@ -3154,9 +3366,10 @@ export function createKeibaApp(React, icons) {
         screen === "race" && h(RaceDetail, { raceCards, selectedRaceId, averageTimes, horseRecords, openHorse, openResultImport, setScreen: navigate, goBack, goHome, deleteRaceEntryOnly }),
         screen === "races" && h(RegisteredRaceList, { raceCards, averageTimes, horseRecords, openRaceDetail, deleteRaceEntryOnly, setScreen: navigate }),
         screen === "prediction" && h(PredictionPage, { raceCards, horseRecords, openPredictionRace }),
-        screen === "predictionRace" && h(PredictionRacePage, { selectedRaceId: selectedPredictionRaceId, raceCards, horseRecords, memos, paceNotes, averageTimes, openHorse, openRaceDetail, openPacePrediction, openImportantFactors }),
+        screen === "predictionRace" && h(PredictionRacePage, { selectedRaceId: selectedPredictionRaceId, raceCards, horseRecords, memos, paceNotes, averageTimes, trackBiasNotes, openHorse, openRaceDetail, openPacePrediction, openImportantFactors, openTrackBias }),
         screen === "pacePrediction" && h(PacePredictionDetailPage, { selectedRaceId: selectedPredictionRaceId, raceCards, horseRecords, paceNotes, onSaveNote: savePacePredictionNote }),
-        screen === "importantFactors" && h(ImportantFactorDetailPage, { selectedRaceId: selectedPredictionRaceId, raceCards, horseRecords, memos, averageTimes, factorNotes, onSaveFactorNote: saveFactorNote }),
+        screen === "importantFactors" && h(ImportantFactorDetailPage, { selectedRaceId: selectedPredictionRaceId, raceCards, horseRecords, memos, averageTimes, factorNotes, trackBiasNotes, onSaveFactorNote: saveFactorNote }),
+        screen === "trackBias" && h(TrackBiasDetailPage, { selectedRaceId: selectedPredictionRaceId, raceCards, horseRecords, averageTimes, trackBiasNotes, onSaveTrackBiasNote: saveTrackBiasNote }),
         screen === "deleteResults" && h(RaceResultDeleteScreen, { raceCards, horseRecords, onDeleteResult: deleteRaceResultByRaceId }),
         screen === "average" && h(AverageTimesScreen, { averageTimes }),
         screen === "diagnostic" && h(DataDiagnosticScreen, { setScreen: navigate }),
@@ -3183,6 +3396,7 @@ export function createKeibaApp(React, icons) {
       predictionRace: "馬柱",
       pacePrediction: "展開予想",
       importantFactors: "重要ファクター",
+      trackBias: "トラックバイアス",
       deleteResults: "レース成績を削除",
       average: "平均タイム",
       diagnostic: "データ診断",
@@ -4650,17 +4864,41 @@ export function createKeibaApp(React, icons) {
     );
   }
 
+  function memoMatchesRecord(memo, record) {
+    const memoHorse = normalizeHorseName(memo?.horseName);
+    const recordHorse = normalizeHorseName(record?.horseName);
+    if (!memoHorse || !recordHorse || memoHorse !== recordHorse) return false;
+
+    const memoRaceId = safeString(memo?.raceId || "");
+    const recordRaceId = safeString(record?.raceId || raceIdForHorseRecord(record) || "");
+    const memoHorseNumber = safeString(memo?.horseNumber || memo?.horseNo || "");
+    const recordHorseNumber = safeString(record?.horseNumber || record?.horseNo || "");
+    if (memoRaceId && recordRaceId && memoRaceId === recordRaceId) {
+      if (memoHorseNumber && recordHorseNumber) return memoHorseNumber === recordHorseNumber;
+      return true;
+    }
+
+    const memoDate = getDateKeySafe(memo?.date || memo?.raceDate || "");
+    const recordDate = getDateKeySafe(record?.raceDate || record?.date || "");
+    const memoTrack = safeString(memo?.racecourse || memo?.track || "");
+    const recordTrack = safeString(record?.track || record?.racecourse || "");
+    const memoRaceNumber = normalizeRaceNumber(memo?.raceNumber || memo?.R || "");
+    const recordRaceNumber = normalizeRaceNumber(record?.raceNumber || record?.R || "");
+    const sameRace = memoDate !== "日付未設定"
+      && recordDate !== "日付未設定"
+      && memoDate === recordDate
+      && memoTrack === recordTrack
+      && memoRaceNumber === recordRaceNumber;
+    if (!sameRace) return false;
+    if (memoHorseNumber && recordHorseNumber) return memoHorseNumber === recordHorseNumber;
+    return true;
+  }
+
   function findMemoForRecord(memosForHorse, record) {
-    return memosForHorse.find((memo) =>
-      memo.horseName.trim() === normalizeHorseName(record.horseName)
-      && (memo.raceDate || memo.date) === record.raceDate
-      && (memo.track || memo.racecourse) === record.track
-      && String(memo.raceNumber || "") === String(record.raceNumber || "")
-    ) || memosForHorse.find((memo) =>
-      memo.horseName.trim() === normalizeHorseName(record.horseName)
-      && (memo.raceDate || memo.date) === record.raceDate
-      && (memo.track || memo.racecourse) === record.track
-    ) || null;
+    return safeArray(memosForHorse)
+      .slice()
+      .sort((a, b) => safeString(b.updatedAt || b.createdAt || b.date || b.raceDate).localeCompare(safeString(a.updatedAt || a.createdAt || a.date || a.raceDate)))
+      .find((memo) => memoMatchesRecord(memo, record)) || null;
   }
 
   function HorseRecordCard({ record, memo, rivalSummary, expanded, onToggle, onWriteMemo, onOpenRace }) {
@@ -4813,7 +5051,7 @@ export function createKeibaApp(React, icons) {
     );
   }
 
-  function PredictionRacePage({ selectedRaceId, raceCards, horseRecords, memos, paceNotes, averageTimes, openHorse, openRaceDetail, openPacePrediction, openImportantFactors }) {
+  function PredictionRacePage({ selectedRaceId, raceCards, horseRecords, memos, paceNotes, averageTimes, trackBiasNotes, openHorse, openRaceDetail, openPacePrediction, openImportantFactors, openTrackBias }) {
     const storedCards = getAllRaceCards();
     const cards = sanitizeRaceCards(storedCards.length > 0 ? storedCards : raceCards);
     const race = cards.find((item) => item.raceId === selectedRaceId || item.id === selectedRaceId);
@@ -4825,7 +5063,8 @@ export function createKeibaApp(React, icons) {
     const info = race.raceInfo || {};
     const entries = safeArray(race.entries).map(sanitizeRaceEntry);
     const pace = buildPacePrediction(race, horseRecords, paceNotes, cards);
-    const factorInfo = getImportantFactorGroupsForRace(race, cards, averageTimes, horseRecords);
+    const factorInfo = getImportantFactorGroupsForRace(race, cards, averageTimes, horseRecords, trackBiasNotes);
+    const trackBias = buildTrackBiasSummaryForRace(race, cards, averageTimes, horseRecords, trackBiasNotes);
 
     return h("section", { className: "screen prediction-screen" },
       h("article", { className: "race-detail-hero prediction-hero" },
@@ -4850,6 +5089,7 @@ export function createKeibaApp(React, icons) {
         }))),
       h(PacePredictionSummary, { race, pace, openPacePrediction }),
       h(ImportantFactorSummary, { race, factorInfo, openImportantFactors }),
+      h(TrackBiasSummary, { race, trackBias, openTrackBias }),
       h("div", { className: "form-actions" },
         h("button", { type: "button", className: "secondary full-button", onClick: () => openRaceDetail(race.raceId || race.id) }, "レース詳細を見る")
       )
@@ -4998,7 +5238,7 @@ export function createKeibaApp(React, icons) {
     );
   }
 
-  function ImportantFactorDetailPage({ selectedRaceId, raceCards, horseRecords, memos, averageTimes, factorNotes, onSaveFactorNote }) {
+  function ImportantFactorDetailPage({ selectedRaceId, raceCards, horseRecords, memos, averageTimes, factorNotes, trackBiasNotes, onSaveFactorNote }) {
     const storedCards = getAllRaceCards();
     const cards = sanitizeRaceCards(storedCards.length > 0 ? storedCards : raceCards);
     const race = cards.find((item) => item.raceId === selectedRaceId || item.id === selectedRaceId);
@@ -5008,7 +5248,7 @@ export function createKeibaApp(React, icons) {
       );
     }
     const info = race.raceInfo || {};
-    const factorInfo = getImportantFactorGroupsForRace(race, cards, averageTimes, horseRecords);
+    const factorInfo = getImportantFactorGroupsForRace(race, cards, averageTimes, horseRecords, trackBiasNotes);
     const factors = [...new Set(safeArray(factorInfo.groups).flatMap((group) => safeArray(group.factors)))];
     const entries = safeArray(race.entries).map(sanitizeRaceEntry);
     return h("section", { className: "screen prediction-screen" },
@@ -5056,6 +5296,117 @@ export function createKeibaApp(React, icons) {
           })
         );
       }))
+    );
+  }
+
+  function TrackBiasSummary({ race, trackBias, openTrackBias }) {
+    const raceId = race?.raceId || race?.id || "";
+    const targetLabel = [trackBias?.track, trackBias?.surface].filter(Boolean).join(" ");
+    const hasReferences = safeArray(trackBias?.referenceRaces).length > 0;
+    return h("article", { className: "track-bias-card" },
+      h("div", { className: "section-heading compact-heading" },
+        h("h3", null, "トラックバイアス"),
+        h("button", { type: "button", className: "secondary small", onClick: () => openTrackBias(raceId) }, "詳しく見る")
+      ),
+      h("p", { className: "muted-mini" }, targetLabel || "コース情報未設定"),
+      hasReferences
+        ? h("div", { className: "track-bias-grid" },
+          h("div", null, h("span", null, "時計傾向"), h("strong", null, trackBias.clock?.label || "判定材料不足")),
+          h("div", null, h("span", null, "内外傾向"), h("strong", null, trackBias.manual?.pathLabel || "判定材料不足")),
+          h("div", null, h("span", null, "脚質傾向"), h("strong", null, trackBias.manual?.styleLabel || "判定材料不足")),
+          h("div", null, h("span", null, "対象レース"), h("strong", null, `前日＋同日 ${trackBias.targetRaceCount || 0}レース`)),
+          h("div", null, h("span", null, "入力済み"), h("strong", null, `${trackBias.inputCount || 0}件`))
+        )
+        : h("p", { className: "muted-mini" }, "前日＋同日の登録済みレースがありません。"),
+      h("p", { className: "muted-mini" }, "登録済みレースと手入力情報からの補助判断です。")
+    );
+  }
+
+  function TrackBiasDetailPage({ selectedRaceId, raceCards, horseRecords, averageTimes, trackBiasNotes, onSaveTrackBiasNote }) {
+    const storedCards = getAllRaceCards();
+    const cards = sanitizeRaceCards(storedCards.length > 0 ? storedCards : raceCards);
+    const race = cards.find((item) => item.raceId === selectedRaceId || item.id === selectedRaceId);
+    if (!race) {
+      return h("section", { className: "screen prediction-screen" },
+        h(EmptyState, { title: "トラックバイアスを表示するレースが見つかりません", text: "予想タブからレースを選び直してください。" })
+      );
+    }
+    const info = race.raceInfo || {};
+    const summary = buildTrackBiasSummaryForRace(race, cards, averageTimes, horseRecords, trackBiasNotes);
+    const pathChoices = ["内", "中", "外", "不明"];
+    const styleChoices = ["逃げ", "先行", "好位差し", "差し", "追込", "不明"];
+    const notePatch = (raceItem, row, patch) => {
+      const raceInfo = raceItem.raceInfo || {};
+      const existing = getTrackBiasNote(trackBiasNotes, raceItem, row);
+      onSaveTrackBiasNote({
+        ...existing,
+        ...patch,
+        date: dateKeyToIso(raceInfo.raceDate) || raceInfo.raceDate || "",
+        racecourse: raceInfo.track || "",
+        surface: raceInfo.surface || "",
+        raceId: raceItem.raceId || raceItem.id || "",
+        horseNumber: row.horseNumber || "",
+        horseName: row.horseName || "",
+        finishPosition: row.finish || "",
+      });
+    };
+    return h("section", { className: "screen prediction-screen" },
+      h("article", { className: "race-detail-hero prediction-hero" },
+        h("p", null, `${formatDateSlash(info.raceDate)} ${info.track || "-"}${raceNumberLabel(info.raceNumber)}`),
+        h("h2", null, "トラックバイアス詳細"),
+        h("div", { className: "race-detail-line" }, [
+          info.raceName,
+          `${info.surface || ""}${info.distance || ""}${info.distance ? "m" : ""}`,
+          info.going,
+        ].filter(Boolean).map((item) => h("span", { key: item }, item)))
+      ),
+      h("article", { className: "track-bias-card" },
+        h("h3", null, "集計結果"),
+        h("div", { className: "track-bias-grid" },
+          h("div", null, h("span", null, "時計傾向"), h("strong", null, summary.clock?.label || "判定材料不足")),
+          h("div", null, h("span", null, "内外傾向"), h("strong", null, summary.manual?.pathLabel || "判定材料不足")),
+          h("div", null, h("span", null, "脚質傾向"), h("strong", null, summary.manual?.styleLabel || "判定材料不足")),
+          h("div", null, h("span", null, "対象"), h("strong", null, `前日＋同日 ${summary.targetRaceCount || 0}レース`)),
+          h("div", null, h("span", null, "入力済み"), h("strong", null, `${summary.inputCount || 0}件`))
+        ),
+        h("p", { className: "muted-mini" }, "勝ち時計・平均タイムと、1〜3着馬への手入力からの補助判断です。")
+      ),
+      safeArray(summary.referenceRaces).length === 0
+        ? h(EmptyState, { title: "参照対象レースなし", text: "前日＋同日の同競馬場・同馬場種別の登録済みレースがありません。" })
+        : h("div", { className: "track-bias-detail-list" }, safeArray(summary.referenceRaces).map((raceItem) => {
+          const raceInfo = raceItem.raceInfo || {};
+          const rows = sortResultRows(resultRowsFromRace(raceItem, horseRecords)).slice(0, 3);
+          return h("article", { key: raceItem.raceId || raceItem.id, className: "track-bias-race-card" },
+            h("h3", null, `${formatDateSlash(raceInfo.raceDate)} ${raceInfo.track || "-"}${raceNumberLabel(raceInfo.raceNumber)} ${raceInfo.raceName || ""}`),
+            h("p", { className: "muted-mini" }, [`${raceInfo.surface || ""}${raceInfo.distance || ""}${raceInfo.distance ? "m" : ""}`, raceInfo.going].filter(Boolean).join(" / ")),
+            rows.length === 0
+              ? h("p", { className: "muted-mini" }, "1〜3着馬データなし")
+              : rows.map((row) => {
+                const note = getTrackBiasNote(trackBiasNotes, raceItem, row);
+                return h("div", { key: `${row.finish}-${row.horseNumber}-${row.horseName}`, className: "bias-top3-row" },
+                  h("div", { className: "pace-detail-head" },
+                    h(FrameHorseNumbers, { frame: row.frameNumber || row.frame, horseNumber: row.horseNumber }),
+                    h("strong", null, `${row.finish || "-"}着 ${row.horseName || "馬名未設定"}`),
+                    h("span", null, row.time || "")
+                  ),
+                  h("p", { className: "field-label" }, "通ったところ"),
+                  h("div", { className: "bias-choice-row" }, pathChoices.map((value) => h("button", {
+                    key: value,
+                    type: "button",
+                    className: note.coursePath === value ? "selected" : "",
+                    onClick: () => notePatch(raceItem, row, { coursePath: value }),
+                  }, value))),
+                  h("p", { className: "field-label" }, "脚質"),
+                  h("div", { className: "bias-choice-row wide" }, styleChoices.map((value) => h("button", {
+                    key: value,
+                    type: "button",
+                    className: note.runningStyle === value ? "selected" : "",
+                    onClick: () => notePatch(raceItem, row, { runningStyle: value }),
+                  }, value)))
+                );
+              })
+          );
+        }))
     );
   }
 

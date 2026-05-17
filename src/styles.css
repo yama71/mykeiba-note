@@ -2499,7 +2499,9 @@ textarea:focus {
 }
 
 .pace-summary-card,
-.pace-detail-card {
+.pace-detail-card,
+.track-bias-card,
+.track-bias-race-card {
   padding: 12px;
   border: 1px solid rgba(36, 34, 29, 0.1);
   border-radius: 8px;
@@ -2523,7 +2525,8 @@ textarea:focus {
   margin-top: 10px;
 }
 
-.pace-grid div {
+.pace-grid div,
+.track-bias-grid div {
   display: grid;
   gap: 3px;
   padding: 8px;
@@ -2531,15 +2534,64 @@ textarea:focus {
   background: #f8f4eb;
 }
 
-.pace-grid span {
+.pace-grid span,
+.track-bias-grid span {
   color: #6b6254;
   font-size: 11px;
   font-weight: 800;
 }
 
-.pace-detail-list {
+.pace-detail-list,
+.track-bias-detail-list {
   display: grid;
   gap: 10px;
+}
+
+.track-bias-grid {
+  display: grid;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.track-bias-race-card h3 {
+  margin: 0 0 4px;
+  font-size: 15px;
+}
+
+.bias-top3-row {
+  display: grid;
+  gap: 8px;
+  padding: 10px 0;
+  border-top: 1px solid rgba(36, 34, 29, 0.08);
+}
+
+.bias-top3-row:first-of-type {
+  border-top: 0;
+}
+
+.bias-choice-row {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 7px;
+  margin-bottom: 8px;
+}
+
+.bias-choice-row.wide {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.bias-choice-row button {
+  min-height: 36px;
+  border: 1px solid rgba(31, 106, 93, 0.25);
+  border-radius: 8px;
+  background: #f8f4eb;
+  color: #2d4c46;
+  font-weight: 800;
+}
+
+.bias-choice-row button.selected {
+  border-color: #1f6a5d;
+  background: #e5f0ec;
 }
 
 .pace-detail-head {
