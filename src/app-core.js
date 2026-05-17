@@ -13,11 +13,13 @@ const RACE_ENTRIES_COMPAT_KEY = "raceEntries";
 const LAST_RACE_SAVE_DEBUG_KEY = "keiba-last-race-save-debug-v1";
 const REGISTERED_RACE_LIST_ERROR_KEY = "keiba-registered-race-list-error-v1";
 const PACE_NOTES_STORAGE_KEY = "keiba-pace-prediction-notes-v1";
+const FACTOR_NOTES_STORAGE_KEY = "keiba-prediction-factor-notes-v1";
 const BACKUP_VERSION = 1;
 const STORAGE_ALIASES = {
   horseNotes: MEMO_STORAGE_KEY,
   horseRecords: HORSE_RECORDS_STORAGE_KEY,
   pacePredictionNotes: PACE_NOTES_STORAGE_KEY,
+  predictionFactorNotes: FACTOR_NOTES_STORAGE_KEY,
   weeklyRaces: WEEKLY_RACES_COMPAT_KEY,
   raceEntries: RACE_ENTRIES_COMPAT_KEY,
   raceResults: RACE_STORAGE_KEY,
@@ -52,6 +54,64 @@ const scoreTagRules = {
   ハイペース先行粘り: 2,
   着順以上: 2,
 };
+
+const importantFactorRules = [
+  { track: "東京", surface: "ダート", distances: [1600], label: "東京ダート1600m", factors: ["長い直線適性", "芝スタート実績", "外枠", "速い上がり", "1800メートル以上の実績", "コーナリング難の馬", "砂を嫌がる馬"] },
+  { track: "東京", surface: "芝", distances: [1400], label: "東京芝1400m", factors: ["先行力", "長い直線実績", "コーナリングが苦手な馬", "内枠", "速い上がり"] },
+  { track: "東京", surface: "芝", distances: [1600], label: "東京芝1600m", factors: ["速い上がり実績", "長い直線実績", "コーナリングが苦手な馬", "内枠先行馬"] },
+  { track: "東京", surface: "芝", distances: [1800], label: "東京芝1800m", factors: ["速い上がり実績", "長い直線実績", "コーナリングが苦手な馬"] },
+  { track: "東京", surface: "芝", distances: [2000], label: "東京芝2000m", factors: ["内枠", "速い上がり実績", "コーナリング難の馬"] },
+  { track: "東京", surface: "ダート", distances: [1400], label: "東京ダート1400m", factors: ["先行力", "1400以上での連対実績", "コーナリング難の馬", "砂を嫌がる馬の外枠"] },
+  { track: "中山", surface: "芝", distances: [1600], tendency: "fast", label: "中山芝1600m 時計の速い馬場", factors: ["内枠", "先行力", "小回り適性"] },
+  { track: "中山", surface: "芝", distances: [1600], tendency: "slow", label: "中山芝1600m 時計が掛かる馬場", factors: ["小回り適性", "時計のかかる馬場実績", "好位差し、自在性のある脚質"] },
+  { track: "中山", surface: "ダート", distances: [1200], tendency: "fast", label: "中山ダート1200m 時計の速い馬場", factors: ["内枠", "枠不問逃げ馬"] },
+  { track: "中山", surface: "ダート", distances: [1200], tendency: "slow", label: "中山ダート1200m 時計のかかる馬場", factors: ["先行力", "小回り適性", "芝スタート適性"] },
+  { track: "中山", surface: "芝", distances: [1800, 2000], tendency: "fast", label: "中山芝1800/2000m 時計の速い馬場", factors: ["先行馬", "内枠", "小回り実績"] },
+  { track: "中山", surface: "芝", distances: [1800, 2000], tendency: "slow", label: "中山芝1800/2000m 時計のかかる馬場", factors: ["タフな馬", "小回り実績", "坂実績", "トラックバイアス有利"] },
+  { track: "中山", surface: "芝", distances: [1200], tendency: "fast", label: "中山芝1200m 時計の速い馬場", factors: ["先行力", "下り坂実績"] },
+  { track: "中山", surface: "芝", distances: [1200], tendency: "slow", label: "中山芝1200m 時計のかかる馬場", factors: ["上り坂実績", "時計のかかる馬場実績"] },
+  { track: "中山", surface: "ダート", distances: [1800], tendency: "fast", label: "中山ダート1800m 時計の速い馬場", factors: ["先行力", "速い上がり", "小回り実績", "坂実績", "砂を嫌がる馬の外枠"] },
+  { track: "中山", surface: "ダート", distances: [1800], tendency: "slow", label: "中山ダート1800m 時計のかかる馬場", factors: ["好位差し、追い込み馬", "タフな馬", "坂実績", "小回り適性", "砂を嫌がる馬の外枠"] },
+  { track: "阪神", surface: "ダート", distances: [1200], tendency: "slow", label: "阪神ダート1200m 時計のかかる馬場", factors: ["タフな先行馬", "坂実績"] },
+  { track: "阪神", surface: "ダート", distances: [1200], tendency: "fast", label: "阪神ダート1200m 時計の速い馬場", factors: ["上がり実績", "展開が向きそうな馬"] },
+  { track: "阪神", surface: "芝", distances: [1200], label: "阪神芝1200m", factors: ["先行力", "内枠", "小回り適性", "坂実績"] },
+  { track: "阪神", surface: "芝", distances: [1400], label: "阪神芝1400m", factors: ["先行力", "内枠", "小回り適性", "坂実績"] },
+  { track: "阪神", surface: "ダート", distances: [1400], label: "阪神ダート1400m", factors: ["時計のかかる馬場の実績", "坂実績", "芝スタート実績", "砂を嫌がる馬の外枠"] },
+  { track: "阪神", surface: "芝", distances: [1600, 1800], label: "阪神芝1600/1800m", factors: ["長い直線実績", "速い上がり", "坂実績", "逃げ馬"] },
+  { track: "阪神", surface: "芝", distances: [2000, 2200], label: "阪神芝2000/2200m", factors: ["器用さ", "長くいい脚", "坂実績"] },
+  { track: "阪神", surface: "ダート", distances: [1800], label: "阪神ダート1800m", factors: ["タフな馬", "坂実績", "小回り適性", "砂を嫌がる馬の外枠"] },
+  { track: "中京", surface: "芝", distances: [1200, 1400], label: "中京芝1200/1400m", factors: ["長い直線実績", "先行力", "コーナリング難の馬"] },
+  { track: "中京", surface: "芝", distances: [1600], label: "中京芝1600m", factors: ["速い上がり", "コーナリング難の馬"] },
+  { track: "中京", surface: "芝", distances: [2000], label: "中京芝2000m", factors: ["速い上がり", "長い直線実績"] },
+  { track: "中京", surface: "ダート", distances: [1200, 1400, 1800], label: "中京ダート", factors: ["先行力", "速い上がり実績", "砂を嫌がる馬の外枠"] },
+  { track: "新潟", surface: "芝", distances: [1000], label: "新潟芝1000m", factors: ["先行力", "外枠"] },
+  { track: "新潟", surface: "芝", distances: [1600, 1800, 2000], label: "新潟芝1600/1800/2000m 外回り想定", factors: ["速い上がり"] },
+  { track: "新潟", surface: "芝", distances: [2200, 2400], label: "新潟芝2200/2400m", factors: ["小回り適性", "タフな馬", "速い馬場で僅差負け", "長い直線で僅差負け", "スローペースで僅差負け", "平坦巧者"] },
+  { track: "新潟", surface: "芝", distances: [1200], label: "新潟芝1200m", factors: ["先行力", "速い上がり", "コーナリングが得意な馬"] },
+  { track: "新潟", surface: "芝", distances: [1400], label: "新潟芝1400m", factors: ["速い上がり", "先行力", "小回り適性"] },
+  { track: "新潟", surface: "ダート", distances: [1200], label: "新潟ダート1200m", factors: ["先行力", "小回り適性", "上がり実績", "平坦巧者", "砂を嫌がる馬の外枠"] },
+  { track: "新潟", surface: "ダート", distances: [1800], label: "新潟ダート1800m", factors: ["先行力", "小回り適性", "速い上がり実績", "砂を嫌がる馬の外枠"] },
+  { track: "福島", surface: "芝", distances: [1200], tendency: "fast", label: "福島芝1200m 時計の速い馬場", factors: ["内枠", "先行力", "小回り適性"] },
+  { track: "福島", surface: "芝", distances: [1200], tendency: "slow", label: "福島芝1200m 時計のかかる馬場", factors: ["中枠〜外枠の好位差し馬"] },
+  { track: "福島", surface: "ダート", distances: [1150], label: "福島ダート1150m", factors: ["先行力", "小回り適性", "芝スタート実績"] },
+  { track: "福島", surface: "ダート", distances: [1700], label: "福島ダート1700m", factors: ["タフな先行馬", "小回り適性", "砂を嫌がる馬の外枠"] },
+  { track: "福島", surface: "芝", distances: [1800, 2000], tendency: "inner", label: "福島芝1800/2000m 前・内有利の馬場", factors: ["先行力", "内枠", "小回り適性", "タフさ"] },
+  { track: "福島", surface: "芝", distances: [1800, 2000], tendency: "outer", label: "福島芝1800/2000m 外伸び馬場", factors: ["好位差し〜差し脚質", "中枠〜外枠", "小回り適性", "タフさ"] },
+  { track: "小倉", surface: "芝", distances: [1200], label: "小倉芝1200m", factors: ["先行力", "下り坂実績", "有利な枠"] },
+  { track: "小倉", surface: "ダート", distances: [1000], label: "小倉ダート1000m", factors: ["先行力", "小回り適性", "下り坂適性", "砂を嫌がる馬の外枠"] },
+  { track: "小倉", surface: "芝", distances: [1800, 2000], label: "小倉芝1800/2000m", factors: ["小回り適性", "先行力", "下り坂実績", "長くいい脚"] },
+  { track: "小倉", surface: "ダート", distances: [1700], label: "小倉ダート1700m", factors: ["小回り実績", "先行力", "下り坂実績", "砂を嫌がる馬の外枠"] },
+  { track: "札幌", surface: "ダート", distances: [1000], label: "札幌ダート1000m", factors: ["先行力", "小回り適性", "平坦巧者", "砂を嫌がる馬の外枠"] },
+  { track: "札幌", surface: "ダート", distances: [1700], label: "札幌ダート1700m", factors: ["小回り適性", "能力上位", "砂を嫌がる馬の外枠"] },
+  { track: "札幌", surface: "芝", distances: [1200], tendency: "inner", label: "札幌芝1200m 内・前有利", factors: ["先行力", "内枠", "小回り適性"] },
+  { track: "札幌", surface: "芝", distances: [1200], tendency: "outer", label: "札幌芝1200m 外伸び馬場", factors: ["時計のかかる馬場実績", "中枠〜外枠", "小回り適性"] },
+  { track: "札幌", surface: "芝", distances: [1800, 2000], label: "札幌芝1800/2000m", factors: ["先行力", "小回り適性", "時計のかかる馬場実績"] },
+  { track: "函館", surface: "芝", distances: [1200], label: "函館芝1200m", factors: ["先行力", "内枠", "小回り適性", "平坦巧者"] },
+  { track: "函館", surface: "芝", distances: [1800], label: "函館芝1800m", factors: ["先行力", "小回り実績", "内枠"] },
+  { track: "函館", surface: "芝", distances: [2000], label: "函館芝2000m", factors: ["小回り適性", "好位差し、差し", "時計のかかる馬場実績", "速い上がり実績"] },
+  { track: "函館", surface: "ダート", distances: [1000], label: "函館ダート1000m", factors: ["先行力", "小回り適性", "平坦巧者", "砂を嫌がる馬の外枠"] },
+  { track: "函館", surface: "ダート", distances: [1700], label: "函館ダート1700m", factors: ["先行力", "小回り適性", "砂を嫌がる馬の外枠"] },
+];
 
 const emptyMemoForm = {
   horseName: "",
@@ -94,6 +154,7 @@ const APP_STORAGE_KEYS = [
   HORSE_RECORDS_STORAGE_KEY,
   AVERAGE_TIMES_STORAGE_KEY,
   PACE_NOTES_STORAGE_KEY,
+  FACTOR_NOTES_STORAGE_KEY,
   BROKEN_WEEKLY_RACES_KEY,
   BROKEN_RACE_ENTRIES_KEY,
   BROKEN_RACE_RESULTS_KEY,
@@ -2295,6 +2356,192 @@ function buildPacePrediction(race, horseRecords = [], paceNotes = [], raceCards 
   return { raceId, entries, activeEntries, groups, paceLabel };
 }
 
+function normalizeFactorNote(note = {}) {
+  return {
+    id: note.id || factorNoteKey(note.raceId, note, note.factorName),
+    raceId: safeString(note.raceId, ""),
+    horseNumber: safeString(note.horseNumber, ""),
+    horseName: normalizeHorseName(note.horseName || ""),
+    factorName: safeString(note.factorName, ""),
+    memo: safeString(note.memo, ""),
+    createdAt: note.createdAt || "",
+    updatedAt: note.updatedAt || "",
+  };
+}
+
+function factorNoteKey(raceId, entry = {}, factorName = "") {
+  return [
+    safeString(raceId, "race"),
+    safeString(entry.horseNumber || entry.horseNo || "", ""),
+    normalizeHorseName(entry.horseName || ""),
+    safeString(factorName, ""),
+  ].join("__");
+}
+
+function getFactorNote(notes, raceId, entry, factorName) {
+  const key = factorNoteKey(raceId, entry, factorName);
+  return normalizeFactorNote(safeArray(notes).find((note) => note.id === key)
+    || { id: key, raceId, horseNumber: entry.horseNumber || "", horseName: entry.horseName || "", factorName });
+}
+
+function normalizeSurfaceLabel(value) {
+  const text = safeString(value, "");
+  if (text.includes("ダ")) return "ダート";
+  if (text.includes("芝")) return "芝";
+  return text;
+}
+
+function extractDistanceNumber(value) {
+  const number = Number(safeString(value, "").match(/\d+/)?.[0] || 0);
+  return Number.isFinite(number) ? number : 0;
+}
+
+function detectRaceTendency(race, sameDateRaces = [], averageTimes = [], horseRecords = []) {
+  const resultText = [
+    race?.result?.trackBiasLabel,
+    race?.result?.paceBiasLabel,
+    race?.result?.biasNote,
+  ].filter(Boolean).join(" ");
+  if (/高速|速い/.test(resultText)) return "fast";
+  if (/かかる|掛かる|タフ/.test(resultText)) return "slow";
+  if (/内|前/.test(resultText)) return "inner";
+  if (/外伸び|外/.test(resultText)) return "outer";
+  const info = race?.raceInfo || {};
+  const summaries = buildTrackTendencySummaries(sameDateRaces, averageTimes, horseRecords);
+  const summary = summaries.find((item) => item.track === info.track && normalizeSurfaceLabel(item.surface) === normalizeSurfaceLabel(info.surface));
+  const clock = safeString(summary?.clockLabel, "");
+  const pace = safeString(summary?.paceLabel, "");
+  if (/高速|速い/.test(clock)) return "fast";
+  if (/かかる|掛かる/.test(clock)) return "slow";
+  if (/先行/.test(pace)) return "inner";
+  if (/差し/.test(pace)) return "outer";
+  return "";
+}
+
+function getImportantFactorGroupsForRace(race, raceCards = [], averageTimes = [], horseRecords = []) {
+  const safeRace = sanitizeRaceCard(race);
+  const info = safeRace.raceInfo || {};
+  const track = info.track || "";
+  const surface = normalizeSurfaceLabel(info.surface || "");
+  const distance = extractDistanceNumber(info.distance);
+  const sameDateRaces = safeArray(raceCards).filter((card) => {
+    const cardInfo = sanitizeRaceCard(card).raceInfo || {};
+    return cardInfo.raceDate && info.raceDate && cardInfo.raceDate === info.raceDate;
+  });
+  const tendency = detectRaceTendency(safeRace, sameDateRaces, averageTimes, horseRecords);
+  const candidates = importantFactorRules.filter((rule) => rule.track === track
+    && rule.surface === surface
+    && safeArray(rule.distances).includes(distance));
+  if (candidates.length === 0) return { label: `${track}${surface}${distance || ""}${distance ? "m" : ""}`, tendency: "", groups: [] };
+  const exact = candidates.filter((rule) => !rule.tendency || rule.tendency === tendency);
+  const groups = exact.length > 0 ? exact : candidates;
+  return {
+    label: groups[0]?.label || `${track}${surface}${distance}m`,
+    tendency,
+    groups,
+    unresolvedTendency: candidates.some((rule) => rule.tendency) && !tendency,
+  };
+}
+
+function getHorseFactorContext(entry, horseRecords = [], memos = [], raceCards = []) {
+  const horseName = normalizeHorseName(entry.horseName);
+  const records = getHorsePredictionRecords(horseName, horseRecords, raceCards);
+  const horseMemos = safeArray(memos).filter((memo) => normalizeHorseName(memo.horseName) === horseName);
+  const tags = [...new Set(horseMemos.flatMap((memo) => [
+    ...safeArray(memo.tags),
+    ...safeArray(memo.troubleTags),
+    ...safeArray(memo.strongTags),
+    ...safeArray(memo.buyTags),
+  ]).filter(Boolean))];
+  const memoText = horseMemos.map((memo) => [memo.memo, memo.nextRunNote].filter(Boolean).join(" ")).join(" ");
+  const bestLast3f = records.map((record) => Number(record.last3f)).filter((value) => Number.isFinite(value) && value > 0).sort((a, b) => a - b)[0];
+  const bestFirstFurlong = getBestFirstFurlong(records);
+  return { horseName, records, horseMemos, tags, memoText, bestLast3f, bestFirstFurlong };
+}
+
+function hasTagOrMemo(context, words) {
+  const text = `${context.tags.join(" ")} ${context.memoText}`;
+  return safeArray(words).some((word) => text.includes(word));
+}
+
+function bestFinishRecord(records, predicate) {
+  return safeArray(records).filter(predicate).sort((a, b) => Number(a.finish || 99) - Number(b.finish || 99))[0] || null;
+}
+
+function analyzeImportantFactor(factorName, entry, context, raceCards = []) {
+  const records = safeArray(context.records);
+  const frame = Number(entry.frameNumber || entry.frame || 0);
+  const factor = safeString(factorName, "");
+  const positive = (text) => ({ label: `${text}`, tone: "positive" });
+  const neutral = (text = "該当データなし") => ({ label: text, tone: "neutral" });
+  if (/先行|逃げ|好位/.test(factor)) {
+    const frontCount = records.filter((record) => Number(record.corner4 || record.corner3) > 0 && Number(record.corner4 || record.corner3) <= 3).length;
+    const tag = hasTagOrMemo(context, ["先行", "逃げ", "前で運ぶ", "好位"]);
+    if (frontCount || tag || context.bestFirstFurlong !== "-") return positive(`4角3番手以内 ${frontCount}回 / 最速テン1F ${context.bestFirstFurlong}${tag ? " / 関連タグあり" : ""}`);
+    return neutral();
+  }
+  if (/速い上がり|上がり/.test(factor)) {
+    const tag = hasTagOrMemo(context, ["上がり優秀", "速い上がり", "末脚"]);
+    if (context.bestLast3f || tag) return positive(`${context.bestLast3f ? `最速上がり ${context.bestLast3f.toFixed(1)}` : "上がりデータなし"}${tag ? " / 関連タグあり" : ""}`);
+    return neutral();
+  }
+  if (/長い直線/.test(factor)) {
+    const record = bestFinishRecord(records, (item) => ["東京", "新潟", "中京"].includes(item.track || item.racecourse || "") && Number(item.finish || 99) <= 3);
+    const tag = hasTagOrMemo(context, ["長い直線", "長くいい脚", "直線不利"]);
+    if (record || tag) return positive(record ? `${record.track || record.racecourse}${record.distance || ""} ${record.finish}着${tag ? " / 関連タグあり" : ""}` : "関連タグあり");
+    return neutral();
+  }
+  if (/芝スタート/.test(factor)) {
+    const record = bestFinishRecord(records, (item) => ["東京", "阪神", "中京", "福島"].includes(item.track || item.racecourse || "") && normalizeSurfaceLabel(item.surface) === "ダート" && [1150, 1400, 1600].includes(extractDistanceNumber(item.distance)) && Number(item.finish || 99) <= 3);
+    if (record) return positive(`${record.track || record.racecourse}ダ${record.distance} ${record.finish}着`);
+    return hasTagOrMemo(context, ["芝スタート"]) ? positive("芝スタートタグあり") : neutral("芝スタート実績なし");
+  }
+  if (/外枠/.test(factor)) return frame >= 6 ? positive(`${frame}枠で条件該当`) : neutral(`${frame || "-"}枠で条件非該当`);
+  if (/内枠/.test(factor)) return frame >= 1 && frame <= 3 ? positive(`${frame}枠で条件該当`) : neutral(`${frame || "-"}枠で条件非該当`);
+  if (/中枠|有利な枠/.test(factor)) return frame >= 4 ? positive(`${frame}枠で条件該当可能性あり`) : neutral(`${frame || "-"}枠`);
+  if (/小回り|器用/.test(factor)) {
+    const record = bestFinishRecord(records, (item) => ["中山", "福島", "小倉", "札幌", "函館"].includes(item.track || item.racecourse || "") && Number(item.finish || 99) <= 3);
+    const tag = hasTagOrMemo(context, ["小回り", "器用", "立ち回り", "コーナリング得意"]);
+    if (record || tag) return positive(record ? `${record.track || record.racecourse}${record.distance || ""} ${record.finish}着${tag ? " / 関連タグあり" : ""}` : "関連タグあり");
+    return neutral();
+  }
+  if (/コーナリング.*苦手|コーナリング難/.test(factor)) return hasTagOrMemo(context, ["コーナリング難", "コーナリング苦手", "4角不利", "外々", "コーナー膨れる"]) ? positive("関連タグ・メモあり") : neutral("関連タグなし");
+  if (/砂/.test(factor)) {
+    const tag = hasTagOrMemo(context, ["砂被り嫌う", "砂を嫌がる", "包まれた", "内で包まれる"]);
+    if (tag) return positive(`砂被り関連タグあり${frame >= 6 ? ` / ${frame}枠で条件好転可能性` : ""}`);
+    return neutral("砂被り関連タグなし");
+  }
+  if (/1800|1400以上/.test(factor)) {
+    const threshold = factor.includes("1800") ? 1800 : 1400;
+    const record = bestFinishRecord(records, (item) => extractDistanceNumber(item.distance) >= threshold && Number(item.finish || 99) <= 2);
+    return record ? positive(`${record.track || record.racecourse}${record.distance || ""} ${record.finish}着`) : neutral();
+  }
+  if (/時計/.test(factor)) {
+    const tag = hasTagOrMemo(context, ["時計かかる", "時計のかかる", "高速馬場", "速い馬場"]);
+    return tag ? positive("馬場時計関連タグあり") : neutral();
+  }
+  if (/坂/.test(factor)) {
+    const record = bestFinishRecord(records, (item) => ["中山", "阪神", "中京", "東京"].includes(item.track || item.racecourse || "") && Number(item.finish || 99) <= 3);
+    return record || hasTagOrMemo(context, ["坂実績", "坂"]) ? positive(record ? `${record.track || record.racecourse}${record.distance || ""} ${record.finish}着` : "坂関連タグあり") : neutral();
+  }
+  if (/平坦/.test(factor)) {
+    const record = bestFinishRecord(records, (item) => ["新潟", "札幌", "函館"].includes(item.track || item.racecourse || "") && Number(item.finish || 99) <= 3);
+    return record || hasTagOrMemo(context, ["平坦巧者"]) ? positive(record ? `${record.track || record.racecourse}${record.distance || ""} ${record.finish}着` : "平坦巧者タグあり") : neutral();
+  }
+  if (/下り坂/.test(factor)) {
+    const record = bestFinishRecord(records, (item) => ["阪神", "小倉"].includes(item.track || item.racecourse || "") && Number(item.finish || 99) <= 3);
+    return record || hasTagOrMemo(context, ["下り坂"]) ? positive(record ? `${record.track || record.racecourse}${record.distance || ""} ${record.finish}着` : "下り坂タグあり") : neutral();
+  }
+  if (/タフ/.test(factor)) return hasTagOrMemo(context, ["タフ", "時計のかかる", "渋太い"]) ? positive("タフさ関連タグ・メモあり") : neutral();
+  if (/長くいい脚/.test(factor)) return hasTagOrMemo(context, ["長くいい脚", "早め進出", "まくり"]) ? positive("持続力系タグ・メモあり") : neutral();
+  if (/能力上位/.test(factor)) {
+    const wins = records.filter((record) => String(record.finish) === "1").length;
+    const rating = context.horseMemos.map((memo) => normalizeRating(memo.rating || memo.attention)).find((value) => value);
+    return wins || rating ? positive(`${rating ? `評価${rating}` : "評価なし"} / 勝利${wins}回`) : neutral("評価・勝利実績なし");
+  }
+  return neutral();
+}
+
 function sortRaceCardsRecent(raceCards) {
   return safeArray(raceCards).map(sanitizeRaceCard).sort((a, b) =>
     String(b.raceInfo?.raceDate || "").localeCompare(String(a.raceInfo?.raceDate || ""))
@@ -2512,6 +2759,7 @@ export function createKeibaApp(React, icons) {
     const [selectedRaceId, setSelectedRaceId] = useState("");
     const [selectedPredictionRaceId, setSelectedPredictionRaceId] = useState("");
     const [paceNotes, setPaceNotes] = useState(() => loadJson(PACE_NOTES_STORAGE_KEY).map(normalizePaceNote));
+    const [factorNotes, setFactorNotes] = useState(() => loadJson(FACTOR_NOTES_STORAGE_KEY).map(normalizeFactorNote));
     const [navigationHistory, setNavigationHistory] = useState([]);
     const [toast, setToast] = useState("");
 
@@ -2531,6 +2779,7 @@ export function createKeibaApp(React, icons) {
     useEffect(() => saveJson(HORSE_RECORDS_STORAGE_KEY, horseRecords), [horseRecords]);
     useEffect(() => saveJson(AVERAGE_TIMES_STORAGE_KEY, averageTimes), [averageTimes]);
     useEffect(() => saveJson(PACE_NOTES_STORAGE_KEY, safeArray(paceNotes).map(normalizePaceNote)), [paceNotes]);
+    useEffect(() => saveJson(FACTOR_NOTES_STORAGE_KEY, safeArray(factorNotes).map(normalizeFactorNote)), [factorNotes]);
 
     const horseStats = useMemo(() => {
       const map = new Map();
@@ -2845,6 +3094,11 @@ export function createKeibaApp(React, icons) {
       navigate("pacePrediction");
     }
 
+    function openImportantFactors(raceId) {
+      setSelectedPredictionRaceId(raceId);
+      navigate("importantFactors");
+    }
+
     function savePacePredictionNote(raceId, entry, patch) {
       const now = new Date().toISOString();
       const key = paceNoteKey(raceId, entry);
@@ -2857,6 +3111,26 @@ export function createKeibaApp(React, icons) {
           raceId,
           horseNumber: entry.horseNumber || existing.horseNumber || "",
           horseName: entry.horseName || existing.horseName || "",
+          createdAt: existing.createdAt || now,
+          updatedAt: now,
+        });
+        return [nextNote, ...safeArray(current).filter((note) => note.id !== key)];
+      });
+    }
+
+    function saveFactorNote(raceId, entry, factorName, memo) {
+      const now = new Date().toISOString();
+      const key = factorNoteKey(raceId, entry, factorName);
+      setFactorNotes((current) => {
+        const existing = getFactorNote(current, raceId, entry, factorName);
+        const nextNote = normalizeFactorNote({
+          ...existing,
+          id: key,
+          raceId,
+          horseNumber: entry.horseNumber || existing.horseNumber || "",
+          horseName: entry.horseName || existing.horseName || "",
+          factorName,
+          memo,
           createdAt: existing.createdAt || now,
           updatedAt: now,
         });
@@ -2880,8 +3154,9 @@ export function createKeibaApp(React, icons) {
         screen === "race" && h(RaceDetail, { raceCards, selectedRaceId, averageTimes, horseRecords, openHorse, openResultImport, setScreen: navigate, goBack, goHome, deleteRaceEntryOnly }),
         screen === "races" && h(RegisteredRaceList, { raceCards, averageTimes, horseRecords, openRaceDetail, deleteRaceEntryOnly, setScreen: navigate }),
         screen === "prediction" && h(PredictionPage, { raceCards, horseRecords, openPredictionRace }),
-        screen === "predictionRace" && h(PredictionRacePage, { selectedRaceId: selectedPredictionRaceId, raceCards, horseRecords, memos, paceNotes, openHorse, openRaceDetail, openPacePrediction }),
+        screen === "predictionRace" && h(PredictionRacePage, { selectedRaceId: selectedPredictionRaceId, raceCards, horseRecords, memos, paceNotes, averageTimes, openHorse, openRaceDetail, openPacePrediction, openImportantFactors }),
         screen === "pacePrediction" && h(PacePredictionDetailPage, { selectedRaceId: selectedPredictionRaceId, raceCards, horseRecords, paceNotes, onSaveNote: savePacePredictionNote }),
+        screen === "importantFactors" && h(ImportantFactorDetailPage, { selectedRaceId: selectedPredictionRaceId, raceCards, horseRecords, memos, averageTimes, factorNotes, onSaveFactorNote: saveFactorNote }),
         screen === "deleteResults" && h(RaceResultDeleteScreen, { raceCards, horseRecords, onDeleteResult: deleteRaceResultByRaceId }),
         screen === "average" && h(AverageTimesScreen, { averageTimes }),
         screen === "diagnostic" && h(DataDiagnosticScreen, { setScreen: navigate }),
@@ -2907,6 +3182,7 @@ export function createKeibaApp(React, icons) {
       prediction: "予想",
       predictionRace: "馬柱",
       pacePrediction: "展開予想",
+      importantFactors: "重要ファクター",
       deleteResults: "レース成績を削除",
       average: "平均タイム",
       diagnostic: "データ診断",
@@ -4537,7 +4813,7 @@ export function createKeibaApp(React, icons) {
     );
   }
 
-  function PredictionRacePage({ selectedRaceId, raceCards, horseRecords, memos, paceNotes, openHorse, openRaceDetail, openPacePrediction }) {
+  function PredictionRacePage({ selectedRaceId, raceCards, horseRecords, memos, paceNotes, averageTimes, openHorse, openRaceDetail, openPacePrediction, openImportantFactors }) {
     const storedCards = getAllRaceCards();
     const cards = sanitizeRaceCards(storedCards.length > 0 ? storedCards : raceCards);
     const race = cards.find((item) => item.raceId === selectedRaceId || item.id === selectedRaceId);
@@ -4549,6 +4825,7 @@ export function createKeibaApp(React, icons) {
     const info = race.raceInfo || {};
     const entries = safeArray(race.entries).map(sanitizeRaceEntry);
     const pace = buildPacePrediction(race, horseRecords, paceNotes, cards);
+    const factorInfo = getImportantFactorGroupsForRace(race, cards, averageTimes, horseRecords);
 
     return h("section", { className: "screen prediction-screen" },
       h("article", { className: "race-detail-hero prediction-hero" },
@@ -4572,6 +4849,7 @@ export function createKeibaApp(React, icons) {
           openHorse,
         }))),
       h(PacePredictionSummary, { race, pace, openPacePrediction }),
+      h(ImportantFactorSummary, { race, factorInfo, openImportantFactors }),
       h("div", { className: "form-actions" },
         h("button", { type: "button", className: "secondary full-button", onClick: () => openRaceDetail(race.raceId || race.id) }, "レース詳細を見る")
       )
@@ -4691,6 +4969,90 @@ export function createKeibaApp(React, icons) {
             rows: 3,
             placeholder: "例：叩いた上積みあり。揉まれ弱いので外枠なら。",
             onChange: (event) => onSaveNote(pace.raceId, entry, { comment: event.target.value }),
+          })
+        );
+      }))
+    );
+  }
+
+  function ImportantFactorSummary({ race, factorInfo, openImportantFactors }) {
+    const raceId = race?.raceId || race?.id || "";
+    const groups = safeArray(factorInfo?.groups);
+    const factors = groups.length ? groups.flatMap((group) => safeArray(group.factors)) : [];
+    const uniqueFactors = [...new Set(factors)];
+    return h("article", { className: "important-factor-card" },
+      h("div", { className: "section-heading compact-heading" },
+        h("h3", null, "重要ファクター"),
+        uniqueFactors.length > 0 && h("button", { type: "button", className: "secondary small", onClick: () => openImportantFactors(raceId) }, "詳しく見る")
+      ),
+      h("p", { className: "muted-mini" }, factorInfo?.label || "コース情報未設定"),
+      groups.length === 0
+        ? h("p", { className: "muted-mini" }, "このコースの重要ファクターはまだ登録されていません")
+        : h("div", { className: "important-factor-list" },
+          factorInfo.unresolvedTendency && h("p", { className: "muted-mini" }, "馬場傾向：未判定。該当しうるパターンを表示しています。"),
+          groups.map((group) => h("div", { key: group.label, className: "important-factor-group" },
+            groups.length > 1 && h("strong", null, group.label),
+            h("ol", null, safeArray(group.factors).map((factor) => h("li", { key: factor }, factor)))
+          ))
+        )
+    );
+  }
+
+  function ImportantFactorDetailPage({ selectedRaceId, raceCards, horseRecords, memos, averageTimes, factorNotes, onSaveFactorNote }) {
+    const storedCards = getAllRaceCards();
+    const cards = sanitizeRaceCards(storedCards.length > 0 ? storedCards : raceCards);
+    const race = cards.find((item) => item.raceId === selectedRaceId || item.id === selectedRaceId);
+    if (!race) {
+      return h("section", { className: "screen prediction-screen" },
+        h(EmptyState, { title: "重要ファクターを表示するレースが見つかりません", text: "予想タブからレースを選び直してください。" })
+      );
+    }
+    const info = race.raceInfo || {};
+    const factorInfo = getImportantFactorGroupsForRace(race, cards, averageTimes, horseRecords);
+    const factors = [...new Set(safeArray(factorInfo.groups).flatMap((group) => safeArray(group.factors)))];
+    const entries = safeArray(race.entries).map(sanitizeRaceEntry);
+    return h("section", { className: "screen prediction-screen" },
+      h("article", { className: "race-detail-hero prediction-hero" },
+        h("p", null, `${formatDateSlash(info.raceDate)} ${info.track || "-"}${raceNumberLabel(info.raceNumber)}`),
+        h("h2", null, "重要ファクター詳細"),
+        h("div", { className: "race-detail-line" }, [
+          info.raceName,
+          `${info.surface || ""}${info.distance || ""}${info.distance ? "m" : ""}`,
+          info.going,
+        ].filter(Boolean).map((item) => h("span", { key: item }, item)))
+      ),
+      factors.length === 0
+        ? h(EmptyState, { title: "重要ファクター未登録", text: "このコースの重要ファクターはまだ登録されていません。" })
+        : h("article", { className: "important-factor-card" },
+          h("h3", null, factorInfo.label),
+          factorInfo.unresolvedTendency && h("p", { className: "muted-mini" }, "馬場傾向未判定のため、該当しうるファクターをまとめて表示しています。"),
+          h("ol", null, factors.map((factor) => h("li", { key: factor }, factor)))
+        ),
+      factors.length > 0 && h("div", { className: "important-factor-detail-list" }, entries.map((entry) => {
+        const context = getHorseFactorContext(entry, horseRecords, memos, cards);
+        const isScratched = entry.isScratched || entry.status === "取消";
+        return h("article", { key: `${entry.horseNumber}-${entry.horseName}`, className: `important-factor-horse-card ${isScratched ? "scratched" : ""}` },
+          h("div", { className: "pace-detail-head" },
+            h(FrameHorseNumbers, { frame: entry.frameNumber || entry.frame, horseNumber: entry.horseNumber }),
+            h("strong", null, entry.horseName || "馬名未設定"),
+            isScratched && h("span", { className: "scratch-badge" }, "取消"),
+            h("span", null, context.records.length ? `成績${context.records.length}` : "過去成績なし")
+          ),
+          factors.map((factor) => {
+            const analysis = analyzeImportantFactor(factor, entry, context, cards);
+            const note = getFactorNote(factorNotes, race.raceId || race.id, entry, factor);
+            return h("div", { key: factor, className: "factor-analysis-row" },
+              h("div", null,
+                h("strong", null, factor),
+                h("p", { className: analysis.tone === "positive" ? "factor-positive" : "muted-mini" }, analysis.label || "該当データなし")
+              ),
+              h("textarea", {
+                value: note.memo || "",
+                rows: 2,
+                placeholder: "このファクターについて追記メモ",
+                onChange: (event) => onSaveFactorNote(race.raceId || race.id, entry, factor, event.target.value),
+              })
+            );
           })
         );
       }))
