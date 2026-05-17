@@ -2281,6 +2281,27 @@ textarea:focus {
   overflow-wrap: anywhere;
 }
 
+.scratch-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: fit-content;
+  border: 1px solid #c95656;
+  border-radius: 999px;
+  background: #fff4f4;
+  color: #b42323;
+  font-size: 0.72rem;
+  font-weight: 800;
+  line-height: 1;
+  padding: 0.18rem 0.42rem;
+  white-space: nowrap;
+}
+
+.scratch-badge.inline {
+  margin-left: 0.4rem;
+  vertical-align: middle;
+}
+
 .runner-main p {
   margin: 4px 0 0;
   color: #6b6254;

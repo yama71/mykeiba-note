@@ -472,43 +472,112 @@ function parseRaceEntries(text) {
 }
 
 function parseNetkeibaRaceEntries(lines) {
-  const hasNetkeibaMarker = safeArray(lines).filter((line) => line.includes("のデータベース")).length >= 1;
-  if (!hasNetkeibaMarker) return [];
+  const safeLines = safeArray(lines).map((line) => String(line || "").trim()).filter(Boolean);
+  const hasNetkeibaMarker = safeLines.some((line) => line.includes("のデータベース"));
+  const hasNetkeibaLikeBlocks = safeLines.some((line) => /^\d{1,2}(?:\s+取消)?(?:\s+.+)?$/.test(line))
+    && safeLines.some((line) => /(?:牡|牝|せん|セン|セ|騙)\d{1,2}/.test(line));
+  if (!hasNetkeibaMarker && !hasNetkeibaLikeBlocks) return [];
+
+  const starts = [];
+  safeLines.forEach((line, index) => {
+    const match = line.match(/^(\d{1,2})(?:\s+(取消))?(?:\s+(.+))?$/);
+    if (!match) return;
+    const headerName = match[3] && !/^(?:取消|--|\d+(?:\.\d+)?|\d+人気.*)$/.test(match[3]) ? match[3] : "";
+    starts.push({ index, horseNumber: match[1], isScratched: Boolean(match[2]), headerName });
+  });
+  if (starts.length === 0) return [];
+
   const rows = [];
-  for (let index = 0; index < lines.length; index += 1) {
-    const horseNumberLine = String(lines[index] || "").trim();
-    if (!/^\d{1,2}$/.test(horseNumberLine)) continue;
-    const scope = lines.slice(index + 1, index + 8);
-    const detailLine = scope.find((line) => /のデータベース/.test(line) && /(牡|牝|せん|セン|騙)\d{1,2}/.test(line));
-    if (!detailLine) continue;
-    const nameLine = scope.find((line) => {
-      const value = String(line || "").trim();
-      return value
-        && !/^\d{1,2}$/.test(value)
-        && !/^\d+(?:\.\d+)?$/.test(value)
-        && !/\d+人気/.test(value)
-        && !/^\([+-]?\d+\)$/.test(value)
-        && !/のデータベース/.test(value);
-    });
-    const detail = detailLine.match(/((?:牡|牝|せん|セン|騙)\d{1,2})\s+(.+?)のデータベース\s+(.+?)\s+(\d{2}(?:\.\d)?)/);
-    if (!detail) continue;
-    const popularityLine = scope.find((line) => /\d{1,2}人気/.test(line)) || "";
-    const popularity = popularityLine.match(/(\d{1,2})人気/)?.[1] || "";
-    rows.push({
-      id: crypto.randomUUID(),
-      frameNumber: "",
-      horseNumber: horseNumberLine,
-      horseName: cleanHorseName(nameLine || detail[2] || ""),
-      sexAge: detail[1].trim(),
-      popularity,
-      jockey: detail[3].replace(/^[▲△☆◇★]\s*/, "").trim(),
-      carriedWeight: detail[4],
-      raw: [horseNumberLine, nameLine, detailLine, popularityLine].filter(Boolean).join(" / "),
-      parsed: true,
-      importSource: "netkeiba形式",
-    });
-  }
+  starts.forEach((start, startIndex) => {
+    const nextStart = starts[startIndex + 1]?.index ?? safeLines.length;
+    const block = safeLines.slice(start.index + 1, nextStart);
+    try {
+      const parsed = parseNetkeibaHorseBlock(start.horseNumber, block, start.isScratched, start.headerName);
+      if (parsed) rows.push(parsed);
+    } catch (error) {
+      console.warn("netkeiba horse block parse failed", error);
+      rows.push({
+        id: crypto.randomUUID(),
+        frameNumber: "",
+        horseNumber: start.horseNumber,
+        horseName: "",
+        sexAge: "",
+        popularity: "",
+        jockey: "",
+        carriedWeight: "",
+        raw: [safeLines[start.index], ...block].join(" / "),
+        parsed: false,
+        importSource: "netkeiba形式",
+        status: start.isScratched ? "取消" : "",
+        isScratched: start.isScratched,
+      });
+    }
+  });
   return rows;
+}
+
+function parseNetkeibaHorseBlock(horseNumber, blockLines, scratchedFromHeader = false, headerName = "") {
+  const block = safeArray(blockLines).map((line) => String(line || "").trim()).filter(Boolean);
+  const isScratched = scratchedFromHeader || block.some((line) => line === "取消");
+  const detailLine = block.find((line) => /(?:牡|牝|せん|セン|セ|騙)\d{1,2}/.test(line) && /\d{2}(?:\.\d)?$/.test(line));
+  const detail = parseNetkeibaDetailLine(detailLine || "");
+  const nameLine = block.find((line) => isNetkeibaHorseNameLine(line, detail?.horseName));
+  const popularityLine = block.find((line) => /\d{1,2}人気/.test(line)) || "";
+  const popularity = popularityLine.match(/(\d{1,2})人気/)?.[1] || "";
+  const horseName = cleanHorseName(headerName || nameLine || detail?.horseName || "");
+  if (!horseNumber && !horseName) return null;
+  return {
+    id: crypto.randomUUID(),
+    frameNumber: "",
+    horseNumber: String(horseNumber || "").trim(),
+    horseName,
+    sexAge: detail?.sexAge || "",
+    popularity,
+    jockey: detail?.jockey || "",
+    carriedWeight: detail?.carriedWeight || "",
+    raw: [horseNumber, ...block].filter(Boolean).join(" / "),
+    parsed: Boolean(horseNumber && horseName && detail?.sexAge && detail?.jockey && detail?.carriedWeight),
+    importSource: "netkeiba形式",
+    status: isScratched ? "取消" : "",
+    isScratched,
+  };
+}
+
+function parseNetkeibaDetailLine(line) {
+  const value = String(line || "").trim();
+  if (!value) return null;
+  const sexAgePattern = "(?:牡|牝|せん|セン|セ|騙)\\d{1,2}";
+  const weightPattern = "(\\d{2}(?:\\.\\d)?)";
+  const withDatabase = value.match(new RegExp(`^(${sexAgePattern})\\s+(.+?)のデータベース\\s*(.+?)\\s+${weightPattern}$`));
+  if (withDatabase) {
+    return {
+      sexAge: withDatabase[1].trim(),
+      horseName: cleanHorseName(withDatabase[2] || ""),
+      jockey: String(withDatabase[3] || "").trim(),
+      carriedWeight: withDatabase[4],
+    };
+  }
+  const withoutDatabase = value.match(new RegExp(`^(${sexAgePattern})\\s*(.+?)\\s+${weightPattern}$`));
+  if (!withoutDatabase) return null;
+  return {
+    sexAge: withoutDatabase[1].trim(),
+    horseName: "",
+    jockey: String(withoutDatabase[2] || "").trim(),
+    carriedWeight: withoutDatabase[3],
+  };
+}
+
+function isNetkeibaHorseNameLine(line, detailHorseName = "") {
+  const value = String(line || "").trim();
+  if (!value) return false;
+  if (detailHorseName && cleanHorseName(value) === cleanHorseName(detailHorseName)) return true;
+  if (/^(取消|--)$/.test(value)) return false;
+  if (/^\d{1,2}(?:\s+取消)?$/.test(value)) return false;
+  if (/^\d+(?:\.\d+)?$/.test(value)) return false;
+  if (/\d+人気/.test(value)) return false;
+  if (/^\([+-]?\d+\)$/.test(value)) return false;
+  if (/^(?:牡|牝|せん|セン|セ|騙)\d{1,2}/.test(value)) return false;
+  return /[^\d\s()（）+-]/.test(value);
 }
 
 function normalizeRaceTextLine(line) {
@@ -1122,6 +1191,8 @@ function sanitizeRaceInfo(info = {}) {
 }
 
 function sanitizeRaceEntry(entry = {}) {
+  const status = String(entry.status || "");
+  const isScratched = Boolean(entry.isScratched || status === "取消");
   return {
     id: entry.id || makeId("entry"),
     frameNumber: String(entry.frameNumber || entry.frame || entry["枠"] || ""),
@@ -1133,6 +1204,8 @@ function sanitizeRaceEntry(entry = {}) {
     carriedWeight: String(entry.carriedWeight || entry.weight || entry["斤量"] || ""),
     raw: entry.raw || "",
     parsed: Boolean(entry.parsed),
+    status: isScratched ? "取消" : status,
+    isScratched,
   };
 }
 
@@ -1146,6 +1219,8 @@ function toStorageRaceEntry(entry = {}) {
     popularity: safeEntry.popularity || "",
     jockey: safeEntry.jockey || "",
     weight: safeEntry.carriedWeight || "",
+    status: safeEntry.status || "",
+    isScratched: Boolean(safeEntry.isScratched),
   };
 }
 
@@ -1660,7 +1735,10 @@ function inspectRaceCardBeforeSave(raceCard, existingRaceCards = []) {
   const missingSexAges = entries.map((entry, index) => String(entry.sexAge || "").trim() ? null : index + 1).filter(Boolean);
   const missingJockeys = entries.map((entry, index) => String(entry.jockey || "").trim() ? null : index + 1).filter(Boolean);
   const missingWeights = entries.map((entry, index) => String(entry.carriedWeight || entry.weight || "").trim() ? null : index + 1).filter(Boolean);
-  const missingPopularities = entries.map((entry, index) => String(entry.popularity || "").trim() ? null : index + 1).filter(Boolean);
+  const missingPopularities = entries.map((entry, index) => {
+    const isScratched = entry.isScratched || entry.status === "取消";
+    return isScratched || String(entry.popularity || "").trim() ? null : index + 1;
+  }).filter(Boolean);
   const missingFrames = entries.map((entry, index) => String(entry.frameNumber || entry.frame || "").trim() ? null : index + 1).filter(Boolean);
   const expectedNumbers = entries.length ? Array.from({ length: entries.length }, (_, index) => String(index + 1)) : [];
   const absentExpectedNumbers = expectedNumbers.filter((number) => !horseNumbers.includes(number));
@@ -2783,7 +2861,7 @@ export function createKeibaApp(React, icons) {
           surface: raceInfo.surface || "",
           going: raceInfo.going || "",
         },
-        entries: safeEntries.map(({ id, frameNumber, horseNumber, horseName, sexAge, popularity, jockey, carriedWeight, raw, parsed }) => ({
+        entries: safeEntries.map(({ id, frameNumber, horseNumber, horseName, sexAge, popularity, jockey, carriedWeight, raw, parsed, status, isScratched }) => ({
           id,
           frameNumber: String(frameNumber || "").trim(),
           horseNumber: String(horseNumber || "").trim(),
@@ -2794,6 +2872,8 @@ export function createKeibaApp(React, icons) {
           carriedWeight: String(carriedWeight || "").trim(),
           raw: raw || "",
           parsed: Boolean(parsed),
+          status: isScratched ? "取消" : String(status || "").trim(),
+          isScratched: Boolean(isScratched || status === "取消"),
         })),
       };
       const validation = validateRaceCard(preparedRaceCard);
@@ -2907,6 +2987,7 @@ export function createKeibaApp(React, icons) {
     return h("article", { className: `entry-card ${entry.parsed ? "" : "unparsed"}` },
       h("div", { className: "entry-head" },
         h("strong", null, entry.parsed ? `${index + 1}頭目` : "未解析"),
+        (entry.isScratched || entry.status === "取消") && h("span", { className: "scratch-badge" }, "取消"),
         entry.raw && h("span", null, entry.raw)
       ),
       h("div", { className: "entry-grid" },
@@ -3833,6 +3914,7 @@ export function createKeibaApp(React, icons) {
     const hasMemo = Boolean(latestMemo);
     const tags = hasMemo ? [...safeArray(latestMemo.troubleTags), ...safeArray(latestMemo.strongTags), ...safeArray(latestMemo.buyTags)] : [];
     const attention = latestMemo?.attention || "";
+    const isScratched = entry.isScratched || entry.status === "取消";
 
     return h("button", { className: `race-runner-card ${attention === "A" ? "attention-a" : ""}`, type: "button", onClick: onOpen },
       h("div", { className: "runner-main" },
@@ -3840,6 +3922,7 @@ export function createKeibaApp(React, icons) {
         h("div", null,
           h("div", { className: "runner-title" },
             h("h4", null, entry.horseName || "馬名未入力"),
+            isScratched && h("span", { className: "scratch-badge" }, "取消"),
             hasMemo && h("span", { className: `rank mini-rank rank-${attention}` }, attention)
           ),
           h("p", null, [
@@ -4361,12 +4444,13 @@ export function createKeibaApp(React, icons) {
     const rating = latestMemo ? normalizeRating(latestMemo.rating || latestMemo.attention) : "";
     const tags = latestMemo ? [...new Set([...safeArray(latestMemo.tags), ...safeArray(latestMemo.troubleTags), ...safeArray(latestMemo.strongTags), ...safeArray(latestMemo.buyTags)])].filter(Boolean) : [];
     const recentRecords = records.slice(0, 3);
+    const isScratched = entry.isScratched || entry.status === "取消";
 
     return h("article", { className: "horse-column-card" },
       h("div", { className: "horse-column-head" },
         h("div", { className: "horse-column-number" }, h(FrameHorseNumbers, { frame: entry.frameNumber || entry.frame, horseNumber: entry.horseNumber })),
         h("button", { type: "button", className: "horse-column-title", onClick: () => openHorse(horseName) },
-          h("strong", null, horseName || "馬名未設定"),
+          h("strong", null, horseName || "馬名未設定", isScratched && h("span", { className: "scratch-badge inline" }, "取消")),
           h("span", null, [entry.sexAge, entry.jockey, entry.carriedWeight || entry.weight ? `${entry.carriedWeight || entry.weight}kg` : "", entry.popularity ? `人気${entry.popularity}` : ""].filter(Boolean).join(" / "))
         ),
         rating ? h("span", { className: `rank mini-rank rank-${rating}` }, rating) : h("span", { className: "muted-mini" }, "評価なし")
