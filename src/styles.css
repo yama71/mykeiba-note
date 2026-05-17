@@ -2349,7 +2349,7 @@ textarea:focus {
   width: min(100%, 720px);
   transform: translateX(-50%);
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(5, 1fr);
   gap: 4px;
   padding: 8px 10px max(8px, env(safe-area-inset-bottom));
   padding-left: max(10px, env(safe-area-inset-left));
@@ -2375,6 +2375,104 @@ textarea:focus {
 .bottom-nav button.active {
   color: #1f6a5d;
   background: #e5f0ec;
+}
+
+.track-tendency-stack,
+.horse-column-stack,
+.mini-record-list {
+  display: grid;
+  gap: 10px;
+}
+
+.track-tendency-card {
+  padding: 12px;
+  border: 1px solid rgba(36, 34, 29, 0.1);
+  border-radius: 8px;
+  background: #fffdf8;
+}
+
+.track-tendency-card h4,
+.track-tendency-card p {
+  margin: 0 0 6px;
+}
+
+.track-tendency-card small {
+  display: block;
+  color: #6b6254;
+  font-size: 11px;
+  line-height: 1.55;
+}
+
+.prediction-race-list {
+  margin-top: 12px;
+}
+
+.horse-column-card {
+  padding: 12px;
+  border: 1px solid rgba(36, 34, 29, 0.1);
+  border-radius: 8px;
+  background: #fffdf8;
+}
+
+.horse-column-head {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  gap: 10px;
+  align-items: start;
+}
+
+.horse-column-title {
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  text-align: left;
+}
+
+.horse-column-title strong {
+  display: block;
+  color: #24221d;
+  font-size: 16px;
+  overflow-wrap: anywhere;
+}
+
+.horse-column-title span,
+.muted-mini {
+  color: #6b6254;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.horse-column-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 8px 0;
+}
+
+.horse-column-meta span {
+  padding: 4px 8px;
+  border-radius: 999px;
+  background: #f2eee5;
+  color: #6b6254;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.mini-record-card {
+  padding: 10px;
+  border-radius: 8px;
+  background: #f8f4eb;
+}
+
+.mini-record-card strong,
+.mini-record-card p {
+  margin: 0 0 5px;
+}
+
+.mini-record-card small {
+  color: #1f6a5d;
+  font-weight: 800;
 }
 
 .toast {
