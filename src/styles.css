@@ -2428,6 +2428,154 @@ textarea:focus {
   margin-top: 12px;
 }
 
+.race-column-board {
+  display: grid;
+  gap: 10px;
+}
+
+.race-column-row {
+  display: grid;
+  grid-template-columns: minmax(142px, 38vw) minmax(0, 1fr);
+  min-height: 156px;
+  border: 1px solid rgba(36, 34, 29, 0.1);
+  border-radius: 8px;
+  background: #fffdf8;
+  overflow: hidden;
+}
+
+.race-column-row.scratched {
+  opacity: 0.72;
+}
+
+.race-column-horse {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  display: grid;
+  align-content: start;
+  gap: 8px;
+  padding: 10px;
+  border-right: 1px solid rgba(36, 34, 29, 0.1);
+  background: #fffdf8;
+}
+
+.race-column-scroll {
+  display: flex;
+  gap: 8px;
+  min-width: 0;
+  overflow-x: auto;
+  padding: 10px;
+  scroll-snap-type: x proximity;
+  -webkit-overflow-scrolling: touch;
+}
+
+.race-column-cell {
+  flex: 0 0 172px;
+  min-height: 132px;
+  padding: 9px;
+  border-radius: 8px;
+  background: #f8f4eb;
+  scroll-snap-align: start;
+}
+
+.race-column-cell.empty {
+  display: grid;
+  place-items: center;
+  color: #6b6254;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.race-column-cell strong,
+.race-column-cell p {
+  margin: 0 0 5px;
+}
+
+.race-column-cell p,
+.race-column-cell small {
+  color: #6b6254;
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.pace-summary-card,
+.pace-detail-card {
+  padding: 12px;
+  border: 1px solid rgba(36, 34, 29, 0.1);
+  border-radius: 8px;
+  background: #fffdf8;
+}
+
+.compact-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.compact-heading h3 {
+  margin: 0;
+}
+
+.pace-grid {
+  display: grid;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.pace-grid div {
+  display: grid;
+  gap: 3px;
+  padding: 8px;
+  border-radius: 8px;
+  background: #f8f4eb;
+}
+
+.pace-grid span {
+  color: #6b6254;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.pace-detail-list {
+  display: grid;
+  gap: 10px;
+}
+
+.pace-detail-head {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 10px;
+}
+
+.pace-detail-head strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.pace-choice-row {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 7px;
+  margin-bottom: 10px;
+}
+
+.pace-choice-row button {
+  min-height: 38px;
+  border: 1px solid rgba(31, 106, 93, 0.25);
+  border-radius: 8px;
+  background: #f8f4eb;
+  color: #2d4c46;
+  font-weight: 800;
+}
+
+.pace-choice-row button.selected {
+  border-color: #1f6a5d;
+  background: #e5f0ec;
+}
+
 .horse-column-card {
   padding: 12px;
   border: 1px solid rgba(36, 34, 29, 0.1);
