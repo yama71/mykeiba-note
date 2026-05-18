@@ -1587,11 +1587,23 @@ function readStorageArrayFlexible(key) {
 
 function getDateKeySafe(value) {
   const raw = safeString(value, "").trim();
-  if (!raw || raw === "日付未設定") return "日付未設定";
+  if (!raw || raw === "日付未設定" || raw === "日付不明") return "日付未設定";
   const matched = raw.match(/(\d{4})[-/](\d{1,2})[-/](\d{1,2})/);
   if (!matched) return raw || "日付未設定";
   const [, year, month, day] = matched;
   return `${year}/${month.padStart(2, "0")}/${day.padStart(2, "0")}`;
+}
+
+function extractDateFromRaceId(value) {
+  const matched = safeString(value, "").match(/(\d{4})[-/](\d{1,2})[-/](\d{1,2})/);
+  if (!matched) return "";
+  const [, year, month, day] = matched;
+  return `${year}/${month.padStart(2, "0")}/${day.padStart(2, "0")}`;
+}
+
+function extractRacecourseFromText(value) {
+  const text = safeString(value, "");
+  return tracks.find((track) => text.includes(track)) || "";
 }
 
 function raceCardListKey(card) {
@@ -1643,9 +1655,21 @@ function raceCardsFromEntryRowsSafe(rows) {
 
 function normalizeRaceCardForList(card) {
   const raceInfo = card?.raceInfo || {};
-  const date = safeString(card?.date || card?.raceDate || raceInfo.raceDate || "");
+  const date = safeString(card?.date || card?.raceDate || card?.race?.date || raceInfo.raceDate || extractDateFromRaceId(card?.raceId || card?.id) || "");
   const dateKey = getDateKeySafe(date);
-  const racecourse = safeString(card?.racecourse || card?.track || raceInfo.track || "競馬場未設定", "競馬場未設定") || "競馬場未設定";
+  const racecourse = safeString(
+    card?.racecourse
+      || card?.course
+      || card?.place
+      || card?.venue
+      || card?.race?.racecourse
+      || card?.race?.place
+      || card?.track
+      || raceInfo.track
+      || extractRacecourseFromText(card?.raceId || card?.id)
+      || "競馬場不明",
+    "競馬場不明",
+  ) || "競馬場不明";
   const raceNumber = normalizeRaceNumber(card?.raceNumber || card?.raceNo || card?.R || raceInfo.raceNumber || "") || safeString(card?.raceNumber || raceInfo.raceNumber || "R未設定", "R未設定") || "R未設定";
   const raceName = safeString(card?.raceName || card?.name || raceInfo.raceName || "レース名未設定", "レース名未設定") || "レース名未設定";
   const raceId = safeString(card?.raceId || card?.id || buildStableRaceId({ date: dateKey === "日付未設定" ? "" : dateKey, racecourse, raceNumber }));
@@ -1737,6 +1761,43 @@ function groupRaceCardsForListByDate(cards) {
       if (b.key === "日付未設定") return -1;
       return safeString(b.key).localeCompare(safeString(a.key));
     });
+}
+
+function raceNumberSortValueForList(race) {
+  return Number(safeString(race?.raceNumber).match(/\d+/)?.[0] || 0);
+}
+
+function groupRaceCardsForListByDateAndCourse(cards) {
+  return groupRaceCardsForListByDate(cards).map((dateGroup) => {
+    const courseMap = new Map();
+    safeArray(dateGroup.races).forEach((race) => {
+      const racecourse = safeString(race.racecourse || "競馬場不明", "競馬場不明") || "競馬場不明";
+      if (!courseMap.has(racecourse)) {
+        courseMap.set(racecourse, {
+          key: `${dateGroup.key}__${racecourse}`,
+          racecourse,
+          races: [],
+          resultCount: 0,
+        });
+      }
+      const course = courseMap.get(racecourse);
+      course.races.push(race);
+      if (race.resultStatusLabel === "登録済み" || race.status === "result_registered" || race.raw?.result) {
+        course.resultCount += 1;
+      }
+    });
+    const courses = [...courseMap.values()]
+      .map((course) => ({
+        ...course,
+        races: course.races.sort((a, b) => raceNumberSortValueForList(a) - raceNumberSortValueForList(b)),
+      }))
+      .sort((a, b) => safeString(a.racecourse).localeCompare(safeString(b.racecourse)));
+    return {
+      ...dateGroup,
+      label: dateGroup.key === "日付未設定" ? "日付不明" : dateGroup.label,
+      courses,
+    };
+  });
 }
 
 function buildTrackTendencySummaries(races, averageTimes = [], horseRecords = []) {
@@ -3066,6 +3127,7 @@ export function createKeibaApp(React, icons) {
     const [factorNotes, setFactorNotes] = useState(() => loadJson(FACTOR_NOTES_STORAGE_KEY).map(normalizeFactorNote));
     const [trackBiasNotes, setTrackBiasNotes] = useState(() => loadJson(TRACK_BIAS_NOTES_STORAGE_KEY).map(normalizeTrackBiasNote));
     const [navigationHistory, setNavigationHistory] = useState([]);
+    const [registeredListState, setRegisteredListState] = useState({ dateKey: "", racecourseKey: "" });
     const [toast, setToast] = useState("");
 
     useEffect(() => saveJson(MEMO_STORAGE_KEY, memos), [memos]);
@@ -3129,6 +3191,14 @@ export function createKeibaApp(React, icons) {
     }
 
     function goBack() {
+      if (screen === "races" && registeredListState.racecourseKey) {
+        setRegisteredListState((current) => ({ ...current, racecourseKey: "" }));
+        return;
+      }
+      if (screen === "races" && registeredListState.dateKey) {
+        setRegisteredListState({ dateKey: "", racecourseKey: "" });
+        return;
+      }
       setNavigationHistory((current) => {
         const previous = current[current.length - 1] || "home";
         setScreen(previous);
@@ -3138,6 +3208,7 @@ export function createKeibaApp(React, icons) {
 
     function goHome() {
       setNavigationHistory([]);
+      setRegisteredListState({ dateKey: "", racecourseKey: "" });
       setScreen("home");
     }
 
@@ -3471,7 +3542,7 @@ export function createKeibaApp(React, icons) {
           screen === "import" && h(RaceImport, { onSave: addRaceCard }),
           screen === "result" && h(ResultImport, { raceCards, horseRecords, selectedRaceId, averageTimes, onSave: saveRaceResult, openHorse }),
         screen === "race" && h(RaceDetail, { raceCards, selectedRaceId, averageTimes, horseRecords, openHorse, openResultImport, setScreen: navigate, goBack, goHome, deleteRaceEntryOnly }),
-        screen === "races" && h(RegisteredRaceList, { raceCards, averageTimes, horseRecords, openRaceDetail, deleteRaceEntryOnly, setScreen: navigate }),
+        screen === "races" && h(RegisteredRaceList, { raceCards, averageTimes, horseRecords, openRaceDetail, deleteRaceEntryOnly, setScreen: navigate, registeredListState, setRegisteredListState }),
         screen === "prediction" && h(PredictionPage, { raceCards, horseRecords, openPredictionRace }),
         screen === "predictionRace" && h(PredictionRacePage, { selectedRaceId: selectedPredictionRaceId, raceCards, horseRecords, memos, paceNotes, averageTimes, trackBiasNotes, openHorse, openRaceDetail, openPacePrediction, openImportantFactors, openTrackBias }),
         screen === "pacePrediction" && h(PacePredictionDetailPage, { selectedRaceId: selectedPredictionRaceId, raceCards, horseRecords, paceNotes, onSaveNote: savePacePredictionNote }),
@@ -4051,7 +4122,124 @@ export function createKeibaApp(React, icons) {
     );
   }
 
-  function RegisteredRaceList({ raceCards, averageTimes = [], horseRecords = [], openRaceDetail, deleteRaceEntryOnly, setScreen }) {
+  function RegisteredRaceList({ raceCards, averageTimes = [], horseRecords = [], openRaceDetail, deleteRaceEntryOnly, setScreen, registeredListState = {}, setRegisteredListState = () => {} }) {
+    let registeredDebugDetails = { safeCount: 0, fallbackCount: safeArray(raceCards).length, displayCount: 0, groupCount: 0 };
+    try {
+      const selectedDateKey = registeredListState.dateKey || "";
+      const selectedRacecourseKey = registeredListState.racecourseKey || "";
+      const safeRaceCards = getAllRaceCardsSafe();
+      const displayRaceCards = safeRaceCards.length > 0 ? safeRaceCards : safeArray(raceCards).map(normalizeRaceCardForList);
+      const dateGroups = groupRaceCardsForListByDateAndCourse(displayRaceCards);
+      const selectedDateGroup = dateGroups.find((group) => group.key === selectedDateKey);
+      const selectedCourse = selectedDateGroup?.courses?.find((course) => course.key === selectedRacecourseKey);
+      registeredDebugDetails = { ...registeredDebugDetails, safeCount: safeRaceCards.length, displayCount: displayRaceCards.length, groupCount: dateGroups.length };
+
+      const openDate = (dateKey) => setRegisteredListState({ dateKey, racecourseKey: "" });
+      const openCourse = (racecourseKey) => setRegisteredListState((current) => ({ ...current, racecourseKey }));
+      const backToDates = () => setRegisteredListState({ dateKey: "", racecourseKey: "" });
+      const backToCourses = () => setRegisteredListState((current) => ({ ...current, racecourseKey: "" }));
+      const renderRaceRow = (race) => h("div", { key: race.raceId || race.id, className: "race-list-row-with-actions" },
+        h("button", {
+          type: "button",
+          className: "compact-race-card",
+          onClick: () => openRaceDetail(race.raceId || race.id),
+        },
+          h("span", { className: "compact-race-main" },
+            h("strong", null, `${race.racecourse}${raceNumberLabel(race.raceNumber)} ${race.raceName}`),
+            h("span", null, [
+              `${race.surface || ""}${race.distance || ""}${race.distance ? "m" : ""}`,
+              `${race.entriesCount}頭`,
+              race.raceClass,
+              `結果：${race.resultStatusLabel}`,
+            ].filter(Boolean).join(" / ")),
+            race.winnerName && h("small", { className: "race-winner-line" }, `1着：${race.winnerName} ${race.winnerTime || ""}`)
+          ),
+          h("span", { className: "race-chevron", "aria-hidden": true }, ">")
+        ),
+        race.entriesCount > 0 && deleteRaceEntryOnly && h("button", { type: "button", className: "danger-button ghost small", onClick: () => deleteRaceEntryOnly(race.raceId) }, "出走表だけ削除")
+      );
+
+      if (displayRaceCards.length === 0) {
+        return h("section", { className: "screen" },
+          h(SectionTitle, { icon: h(ClipboardList, { size: 18 }), title: "登録済みレース一覧" }),
+          h(EmptyState, { title: "登録済みレースはありません", text: "出走表を登録すると、ここに日付ごとで表示されます。" })
+        );
+      }
+
+      if (selectedDateGroup && selectedCourse) {
+        const tendencies = buildTrackTendencySummaries(selectedCourse.races, averageTimes, horseRecords);
+        return h("section", { className: "screen" },
+          h(SectionTitle, { icon: h(ClipboardList, { size: 18 }), title: `${selectedDateGroup.label} ${selectedCourse.racecourse}` }),
+          h("div", { className: "registered-breadcrumb" },
+            h("button", { type: "button", className: "secondary small", onClick: backToCourses }, "競馬場一覧へ")
+          ),
+          h("section", { className: "race-detail-panel" },
+            h("h3", null, "馬場傾向"),
+            tendencies.length
+              ? h("div", { className: "track-tendency-stack compact" }, tendencies.map((summary) => h("article", { key: `${summary.track}-${summary.surface}`, className: "track-tendency-card" },
+                h("h4", null, `${summary.track} ${summary.surface}`),
+                h("p", null, `時計：${summary.clockLabel}`),
+                h("p", null, `脚質：${summary.paceLabel}`),
+                h("small", null, `対象：${summary.raceCount}レース`)
+              )))
+              : h("p", { className: "muted-mini" }, "判定材料不足")
+          ),
+          h("div", { className: "compact-race-list meeting-week-races" }, selectedCourse.races.map(renderRaceRow))
+        );
+      }
+
+      if (selectedDateGroup) {
+        return h("section", { className: "screen" },
+          h(SectionTitle, { icon: h(ClipboardList, { size: 18 }), title: selectedDateGroup.label }),
+          h("div", { className: "registered-breadcrumb" },
+            h("button", { type: "button", className: "secondary small", onClick: backToDates }, "日付一覧へ")
+          ),
+          h("div", { className: "racecourse-list" }, selectedDateGroup.courses.map((course) => h("button", {
+            key: course.key,
+            type: "button",
+            className: "racecourse-card",
+            onClick: () => openCourse(course.key),
+          },
+            h("span", null,
+              h("strong", null, course.racecourse),
+              h("small", null, `${course.races.length}レース / 結果登録済み ${course.resultCount}`)
+            ),
+            h("b", null, ">")
+          )))
+        );
+      }
+
+      return h("section", { className: "screen" },
+        h(SectionTitle, { icon: h(ClipboardList, { size: 18 }), title: "登録済みレース一覧" }),
+        h("div", { className: "meeting-week-list" }, dateGroups.map((group) => h("section", { key: group.key, className: "meeting-week-card" },
+          h("button", { type: "button", className: "meeting-week-button", onClick: () => openDate(group.key) },
+            h("span", null,
+              h("strong", null, group.label),
+              h("small", null, `${group.races.length}レース / ${group.courses.length}場`)
+            ),
+            h("b", null, ">")
+          )
+        )))
+      );
+    } catch (error) {
+      console.error("Registered race list render failed", error);
+      saveRegisteredListError(error, registeredDebugDetails);
+      return h("section", { className: "screen" },
+        h("div", { className: "error-panel" },
+          h("h2", null, "登録済みレース一覧の表示中に問題が発生しました。"),
+          h("p", null, "保存データは削除されていません。ホームへ戻るか、データ診断で状態を確認できます。"),
+          h("details", { className: "storage-debug" },
+            h("summary", null, "エラー詳細を見る"),
+            h("pre", null, `${error?.message || error}\n\n${safeString(error?.stack || "").split("\n").slice(0, 6).join("\n")}\n\n表示対象: ${registeredDebugDetails.displayCount || 0}\n安全取得: ${registeredDebugDetails.safeCount || 0}`)
+          ),
+          h("div", { className: "recovery-actions" },
+            h("button", { type: "button", className: "primary full-button", onClick: () => setScreen("home") }, "ホームへ戻る"),
+            h("button", { type: "button", className: "secondary full-button", onClick: () => setScreen("diagnostic") }, "データ診断を見る"),
+            h("button", { type: "button", className: "secondary full-button", onClick: safeExportAllLocalStorage }, "バックアップを書き出す")
+          )
+        )
+      );
+    }
     const [openDateKey, setOpenDateKey] = useState("");
     let debugDetails = { safeCount: 0, fallbackCount: safeArray(raceCards).length, displayCount: 0, groupCount: 0 };
     try {

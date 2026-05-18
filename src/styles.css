@@ -1957,6 +1957,51 @@ textarea:focus {
   border-left: 3px solid #ded6c8;
 }
 
+.registered-breadcrumb {
+  display: flex;
+  gap: 8px;
+  margin: -2px 0 10px;
+}
+
+.racecourse-list {
+  display: grid;
+  gap: 10px;
+}
+
+.racecourse-card {
+  width: 100%;
+  min-height: 58px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid #ded6c8;
+  border-radius: 8px;
+  color: #24221d;
+  background: #fff;
+  text-align: left;
+}
+
+.racecourse-card span {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.racecourse-card strong {
+  font-size: 16px;
+}
+
+.racecourse-card small {
+  color: #6b6254;
+  font-weight: 800;
+}
+
+.track-tendency-stack.compact {
+  gap: 8px;
+}
+
 .meeting-race-row {
   display: grid;
   gap: 6px;
