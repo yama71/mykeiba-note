@@ -828,6 +828,44 @@ function parseResultRows(text, raceCard) {
   const rows = [];
 
   lines.forEach((line, index) => {
+    const statusHead = line.match(/^(取消|除外|競走除外|中止|競走中止)\s+([1-8])\s+(\d{1,2})(?:\s+(.+))?$/);
+    if (statusHead) {
+      const status = statusHead[1];
+      const horseNameLine = statusHead[4] || lines.slice(index + 1, index + 4).find((nextLine) =>
+        !extractSexAge(nextLine)
+        && !extractJockeyWeight(nextLine)
+        && !extractResultTime(nextLine)
+        && !/^(取消|除外|競走除外|中止|競走中止|\d{1,2}\s+[1-8]\s+\d{1,2})/.test(nextLine)
+      ) || "";
+      const sexAgeLine = lines.slice(index + 1, index + 5).find((nextLine) => extractSexAge(nextLine));
+      const jockeyLine = lines.slice(index + 1, index + 6).find((nextLine) => extractJockeyWeight(nextLine));
+      const jockeyWeight = jockeyLine ? extractJockeyWeight(jockeyLine) : null;
+      const linkedEntry = findRaceEntryForResult(raceCard, statusHead[3], horseNameLine);
+      rows.push({
+        id: crypto.randomUUID(),
+        finish: "",
+        status,
+        isScratched: status === "取消",
+        isExcluded: status === "除外" || status === "競走除外",
+        isStopped: status === "中止" || status === "競走中止",
+        frameNumber: statusHead[2] || linkedEntry?.frameNumber || "",
+        horseNumber: statusHead[3] || linkedEntry?.horseNumber || "",
+        horseName: cleanHorseName(horseNameLine || linkedEntry?.horseName || ""),
+        sexAge: extractSexAge(sexAgeLine || "") || linkedEntry?.sexAge || "",
+        popularity: linkedEntry?.popularity || "",
+        jockey: jockeyWeight?.jockey || linkedEntry?.jockey || "",
+        carriedWeight: jockeyWeight?.carriedWeight || linkedEntry?.carriedWeight || "",
+        time: "",
+        margin: "",
+        last3f: "",
+        corner3: "",
+        corner4: "",
+        firstFurlongEstimate: "-",
+        raw: [line, horseNameLine, sexAgeLine, jockeyLine].filter(Boolean).join(" / "),
+        parsed: Boolean(horseNameLine || linkedEntry?.horseName),
+      });
+      return;
+    }
     const head = line.match(/^(\d{1,2})\s+([1-8])\s+(\d{1,2})(?:\s+(.+))?$/);
     if (!head) return;
 
@@ -862,7 +900,7 @@ function parseResultRows(text, raceCard) {
     });
   });
 
-  return rows.length > 0 ? applyJraFrameAssignment(rows) : [makeResultRow(text.trim())];
+  return rows.length > 0 ? applyResultFrameFallback(rows) : [makeResultRow(text.trim())];
 }
 
 function parseRaceResultMeta(text, raceInfo = {}) {
@@ -1120,10 +1158,54 @@ function toSeconds(value) {
   return null;
 }
 
+function normalizeResultStatus(value) {
+  const text = String(value || "").trim();
+  if (/競走除外/.test(text)) return "競走除外";
+  if (/除外/.test(text)) return "除外";
+  if (/取消/.test(text)) return "取消";
+  if (/競走中止/.test(text)) return "競走中止";
+  if (/中止/.test(text)) return "中止";
+  return "";
+}
+
+function isNonRunnerStatus(value) {
+  return /^(取消|除外|競走除外)$/.test(normalizeResultStatus(value));
+}
+
+function isResultNonRunner(row = {}) {
+  return Boolean(row.isScratched || row.isExcluded || isNonRunnerStatus(row.status || row.finish));
+}
+
+function isResultStopped(row = {}) {
+  return Boolean(row.isStopped || /^(中止|競走中止)$/.test(normalizeResultStatus(row.status || row.finish)));
+}
+
+function isUnavailableEntry(entry = {}) {
+  const status = normalizeResultStatus(entry.status || "");
+  return Boolean(entry.isScratched || entry.isExcluded || status === "取消" || status === "除外" || status === "競走除外");
+}
+
+function isFinishedResultRow(row = {}) {
+  return /^\d+$/.test(String(row.finish || "")) && !isResultNonRunner(row) && !isResultStopped(row);
+}
+
+function resultSortValue(row = {}) {
+  return isFinishedResultRow(row) ? Number(row.finish) : 999;
+}
+
+function applyResultFrameFallback(rows) {
+  const safeRows = safeArray(rows).map(sanitizeResultRow);
+  const total = safeRows.length;
+  return safeRows.map((row) => ({
+    ...row,
+    frameNumber: row.frameNumber || String(inferFrameNumber(row.horseNumber, total)),
+  }));
+}
+
 function judgePaceBias(rows) {
   const board = rows
-    .filter((row) => /^\d+$/.test(row.finish))
-    .sort((a, b) => Number(a.finish) - Number(b.finish))
+    .filter(isFinishedResultRow)
+    .sort((a, b) => resultSortValue(a) - resultSortValue(b))
     .slice(0, 5);
   const cornerPositions = board.map((row) => Number(row.corner4)).filter((value) => Number.isFinite(value));
   const frontCount = cornerPositions.filter((value) => value <= 5).length;
@@ -1154,9 +1236,9 @@ function buildRaceResult(rows, averageWinningTime, sourceText = "", raceInfo = {
   const safeRows = safeArray(rows).map(sanitizeResultRow).map((row) => ({
     ...row,
     frameNumber: row.frameNumber || String(inferFrameNumber(row.horseNumber, safeArray(rows).length)),
-    firstFurlongEstimate: firstFurlongMap[String(row.horseNumber || "")] || row.firstFurlongEstimate || "-",
+    firstFurlongEstimate: isResultNonRunner(row) || isResultStopped(row) ? "-" : firstFurlongMap[String(row.horseNumber || "")] || row.firstFurlongEstimate || "-",
   }));
-  const sortedRows = [...safeRows].sort((a, b) => Number(a.finish || 999) - Number(b.finish || 999));
+  const sortedRows = [...safeRows].filter(isFinishedResultRow).sort((a, b) => resultSortValue(a) - resultSortValue(b));
   const winningTime = sortedRows[0]?.time || "";
   const paceBias = judgePaceBias(safeRows);
   const trackTrend = judgeTrackTrend(winningTime, averageWinningTime);
@@ -1259,7 +1341,9 @@ function sanitizeRaceInfo(info = {}) {
 
 function sanitizeRaceEntry(entry = {}) {
   const status = String(entry.status || "");
-  const isScratched = Boolean(entry.isScratched || status === "取消");
+  const normalizedStatus = normalizeResultStatus(status);
+  const isScratched = Boolean(entry.isScratched || normalizedStatus === "取消");
+  const isExcluded = Boolean(entry.isExcluded || normalizedStatus === "除外" || normalizedStatus === "競走除外");
   return {
     id: entry.id || makeId("entry"),
     frameNumber: String(entry.frameNumber || entry.frame || entry["枠"] || ""),
@@ -1271,8 +1355,9 @@ function sanitizeRaceEntry(entry = {}) {
     carriedWeight: String(entry.carriedWeight || entry.weight || entry["斤量"] || ""),
     raw: entry.raw || "",
     parsed: Boolean(entry.parsed),
-    status: isScratched ? "取消" : status,
+    status: isScratched ? "取消" : isExcluded ? normalizedStatus : status,
     isScratched,
+    isExcluded,
   };
 }
 
@@ -1288,13 +1373,22 @@ function toStorageRaceEntry(entry = {}) {
     weight: safeEntry.carriedWeight || "",
     status: safeEntry.status || "",
     isScratched: Boolean(safeEntry.isScratched),
+    isExcluded: Boolean(safeEntry.isExcluded),
   };
 }
 
 function sanitizeResultRow(row = {}) {
+  const rawStatus = normalizeResultStatus(row.status || row.finish || "");
+  const isScratched = Boolean(row.isScratched || rawStatus === "取消");
+  const isExcluded = Boolean(row.isExcluded || rawStatus === "除外" || rawStatus === "競走除外");
+  const isStopped = Boolean(row.isStopped || rawStatus === "中止" || rawStatus === "競走中止");
   return {
     id: row.id || makeId("result-row"),
-    finish: String(row.finish || ""),
+    finish: isScratched || isExcluded || isStopped ? "" : String(row.finish || ""),
+    status: rawStatus || String(row.status || ""),
+    isScratched,
+    isExcluded,
+    isStopped,
     frameNumber: String(row.frameNumber || row.frame || ""),
     horseNumber: String(row.horseNumber || ""),
     horseName: cleanHorseName(row.horseName || ""),
@@ -1302,12 +1396,12 @@ function sanitizeResultRow(row = {}) {
     popularity: String(row.popularity || ""),
     jockey: String(row.jockey || ""),
     carriedWeight: String(row.carriedWeight || ""),
-    time: String(row.time || ""),
-    margin: String(row.margin || ""),
-    last3f: String(row.last3f || ""),
-    corner3: String(row.corner3 || ""),
-    corner4: String(row.corner4 || row.position || ""),
-    firstFurlongEstimate: String(row.firstFurlongEstimate || "-"),
+    time: isScratched || isExcluded ? "" : String(row.time || ""),
+    margin: isScratched || isExcluded ? "" : String(row.margin || ""),
+    last3f: isScratched || isExcluded ? "" : String(row.last3f || ""),
+    corner3: isScratched || isExcluded ? "" : String(row.corner3 || ""),
+    corner4: isScratched || isExcluded ? "" : String(row.corner4 || row.position || ""),
+    firstFurlongEstimate: isScratched || isExcluded ? "-" : String(row.firstFurlongEstimate || "-"),
   };
 }
 
@@ -1331,9 +1425,10 @@ function sanitizeRaceCard(race = {}) {
     rows: safeArray(rawResult.fullResults || rawResult.rows || rawResult.results).map(sanitizeResultRow),
     fullResults: safeArray(rawResult.fullResults || rawResult.rows || rawResult.results).map(sanitizeResultRow),
     top3: safeArray(rawResult.top3).length > 0
-      ? safeArray(rawResult.top3).map(sanitizeResultRow)
+      ? safeArray(rawResult.top3).map(sanitizeResultRow).filter(isFinishedResultRow)
       : [...safeArray(rawResult.fullResults || rawResult.rows || rawResult.results).map(sanitizeResultRow)]
-        .sort((a, b) => Number(a.finish || 999) - Number(b.finish || 999))
+        .filter(isFinishedResultRow)
+        .sort((a, b) => resultSortValue(a) - resultSortValue(b))
         .slice(0, 3),
     averageWinningTime: rawResult.averageWinningTime || "",
     winningTime: rawResult.winningTime || "",
@@ -1558,7 +1653,7 @@ function normalizeRaceCardForList(card) {
   const rawResult = card?.result || (safeArray(card?.results).length > 0 ? { rows: card.results } : null);
   const status = safeString(card?.status || (rawResult ? "result_registered" : "entry_registered"));
   const winner = rawResult
-    ? sortResultRows(safeArray(rawResult.fullResults || rawResult.rows || rawResult.results).map(sanitizeResultRow))[0]
+    ? sortResultRows(safeArray(rawResult.fullResults || rawResult.rows || rawResult.results).map(sanitizeResultRow)).find(isFinishedResultRow)
     : null;
   return {
     raceId,
@@ -1656,8 +1751,8 @@ function buildTrackTendencySummaries(races, averageTimes = [], horseRecords = []
     if (!groups.has(key)) groups.set(key, { track, surface, diffs: [], front: 0, middle: 0, closer: 0, paceTotal: 0, raceCount: 0 });
     const group = groups.get(key);
     group.raceCount += 1;
-    const rows = sortResultRows(resultRowsFromRace(safeRace, horseRecords));
-    const winner = rows[0];
+    const rows = sortResultRows(resultRowsFromRace(safeRace, horseRecords)).filter(isFinishedResultRow);
+    const winner = rows.find(isFinishedResultRow);
     const average = findAverageTime(averageTimes, info);
     const winnerSeconds = winner?.time ? toSeconds(winner.time) : null;
     const averageSeconds = average?.averageTime ? toSeconds(average.averageTime) : null;
@@ -1803,7 +1898,7 @@ function inspectRaceCardBeforeSave(raceCard, existingRaceCards = []) {
   const missingJockeys = entries.map((entry, index) => String(entry.jockey || "").trim() ? null : index + 1).filter(Boolean);
   const missingWeights = entries.map((entry, index) => String(entry.carriedWeight || entry.weight || "").trim() ? null : index + 1).filter(Boolean);
   const missingPopularities = entries.map((entry, index) => {
-    const isScratched = entry.isScratched || entry.status === "取消";
+    const isScratched = isUnavailableEntry(entry);
     return isScratched || String(entry.popularity || "").trim() ? null : index + 1;
   }).filter(Boolean);
   const missingFrames = entries.map((entry, index) => String(entry.frameNumber || entry.frame || "").trim() ? null : index + 1).filter(Boolean);
@@ -1838,14 +1933,15 @@ function inspectRaceCardBeforeSave(raceCard, existingRaceCards = []) {
 
 function inspectRaceResultBeforeSave(race, rows) {
   const safeRows = safeArray(rows).map(sanitizeResultRow);
+  const finishedRows = safeRows.filter(isFinishedResultRow);
   const warnings = [];
   const fatals = [];
-  const finishes = safeRows.map((row) => String(row.finish || "").trim()).filter(Boolean);
+  const finishes = finishedRows.map((row) => String(row.finish || "").trim()).filter(Boolean);
   const numbers = safeRows.map((row) => String(row.horseNumber || "").trim()).filter(Boolean);
   const duplicatedFinishes = [...new Set(finishes.filter((value, index) => finishes.indexOf(value) !== index))];
   const duplicatedNumbers = [...new Set(numbers.filter((value, index) => numbers.indexOf(value) !== index))];
   const missingNames = safeRows.map((row, index) => normalizeHorseName(row.horseName) ? null : index + 1).filter(Boolean);
-  const missingTimes = safeRows.map((row, index) => String(row.time || "").trim() ? null : index + 1).filter(Boolean);
+  const missingTimes = safeRows.map((row, index) => !isFinishedResultRow(row) || String(row.time || "").trim() ? null : index + 1).filter(Boolean);
   const entries = safeArray(race?.entries);
   const entryNumbers = entries.map((entry) => String(entry.horseNumber || "").trim()).filter(Boolean);
   const unknownNumbers = numbers.filter((number) => entryNumbers.length > 0 && !entryNumbers.includes(number));
@@ -1962,6 +2058,8 @@ function recordKey(record) {
 function buildHorseRecord(race, row) {
   const info = race.raceInfo || {};
   const fieldSize = race.result?.rows?.length || race.entries?.length || "";
+  const nonRunner = isResultNonRunner(row);
+  const stopped = isResultStopped(row);
   return {
     id: recordKey({
       raceId: race.id,
@@ -1981,7 +2079,11 @@ function buildHorseRecord(race, row) {
     distance: info.distance || "",
     going: info.going || "",
     fieldSize,
-    finish: row.finish || "",
+    finish: nonRunner || stopped ? "" : row.finish || "",
+    status: row.status || (row.isScratched ? "取消" : row.isExcluded ? "除外" : row.isStopped ? "中止" : ""),
+    isScratched: Boolean(row.isScratched),
+    isExcluded: Boolean(row.isExcluded),
+    isStopped: Boolean(row.isStopped),
     frameNumber: row.frameNumber || "",
     horseNumber: row.horseNumber || "",
     sexAge: row.sexAge || "",
@@ -1995,7 +2097,7 @@ function buildHorseRecord(race, row) {
     corner4: row.corner4 || "",
     firstFurlongEstimate: row.firstFurlongEstimate || "-",
     averageWinningTime: race.result?.averageWinningTime || "",
-    averageTimeDiff: toSeconds(row.time || "") != null && toSeconds(race.result?.averageWinningTime || "") != null
+    averageTimeDiff: !nonRunner && !stopped && toSeconds(row.time || "") != null && toSeconds(race.result?.averageWinningTime || "") != null
       ? (toSeconds(row.time || "") - toSeconds(race.result?.averageWinningTime || "")).toFixed(1)
       : "",
     trackTrend: race.result?.trackTrend || "",
@@ -2035,6 +2137,10 @@ function resultRowsFromRace(race, horseRecords = []) {
     .map((record) => sanitizeResultRow({
       id: record.id,
       finish: record.finish,
+      status: record.status,
+      isScratched: record.isScratched,
+      isExcluded: record.isExcluded,
+      isStopped: record.isStopped,
       frameNumber: record.frameNumber || record.frame,
       horseNumber: record.horseNumber,
       horseName: record.horseName,
@@ -2068,7 +2174,7 @@ function hasRaceResult(race, horseRecords = []) {
 }
 
 function sortResultRows(rows) {
-  return safeArray(rows).map(sanitizeResultRow).sort((a, b) => Number(a.finish || 999) - Number(b.finish || 999));
+  return safeArray(rows).map(sanitizeResultRow).sort((a, b) => resultSortValue(a) - resultSortValue(b));
 }
 
 function raceKeyFromRecord(record = {}) {
@@ -2084,6 +2190,7 @@ function recordDateValue(record = {}) {
 }
 
 function isWinRecord(record = {}) {
+  if (isResultNonRunner(record) || isResultStopped(record)) return false;
   return String(record.finish || record.rank || "").replace(/[^\d]/g, "") === "1";
 }
 
@@ -2344,7 +2451,7 @@ function classifyPacePosition(bestFirstFurlong, records = [], note = {}) {
 function buildPacePrediction(race, horseRecords = [], paceNotes = [], raceCards = []) {
   const raceId = race?.raceId || race?.id || "";
   const entries = safeArray(race?.entries).map(sanitizeRaceEntry);
-  const activeEntries = entries.filter((entry) => !(entry.isScratched || entry.status === "取消"));
+  const activeEntries = entries.filter((entry) => !isUnavailableEntry(entry));
   const groups = { front: [], middle: [], closer: [], unknown: [] };
   activeEntries.forEach((entry) => {
     const horseName = normalizeHorseName(entry.horseName);
@@ -2490,7 +2597,7 @@ function getTrackBiasReferenceRaces(targetRace, raceCards = []) {
 
 function buildTrackBiasReferenceRows(referenceRaces = [], horseRecords = []) {
   return safeArray(referenceRaces).flatMap((race) => {
-    const rows = sortResultRows(resultRowsFromRace(race, horseRecords)).slice(0, 3);
+    const rows = sortResultRows(resultRowsFromRace(race, horseRecords)).filter(isFinishedResultRow).slice(0, 3);
     return rows.map((row) => ({ race, row }));
   });
 }
@@ -2500,7 +2607,7 @@ function buildTrackBiasClockSummary(referenceRaces = [], averageTimes = [], hors
   safeArray(referenceRaces).forEach((race) => {
     const safeRace = sanitizeRaceCard(race);
     const info = safeRace.raceInfo || {};
-    const winner = sortResultRows(resultRowsFromRace(safeRace, horseRecords))[0];
+    const winner = sortResultRows(resultRowsFromRace(safeRace, horseRecords)).find(isFinishedResultRow);
     const average = findAverageTime(averageTimes, info);
     const winnerSeconds = winner?.time ? toSeconds(winner.time) : null;
     const averageSeconds = average?.averageTime ? toSeconds(average.averageTime) : null;
@@ -2662,7 +2769,7 @@ function hasTagOrMemo(context, words) {
 }
 
 function bestFinishRecord(records, predicate) {
-  return safeArray(records).filter(predicate).sort((a, b) => Number(a.finish || 99) - Number(b.finish || 99))[0] || null;
+  return safeArray(records).filter((record) => isFinishedResultRow(record) && predicate(record)).sort((a, b) => resultSortValue(a) - resultSortValue(b))[0] || null;
 }
 
 function analyzeImportantFactor(factorName, entry, context, raceCards = []) {
@@ -3621,7 +3728,7 @@ export function createKeibaApp(React, icons) {
     return h("article", { className: `entry-card ${entry.parsed ? "" : "unparsed"}` },
       h("div", { className: "entry-head" },
         h("strong", null, entry.parsed ? `${index + 1}頭目` : "未解析"),
-        (entry.isScratched || entry.status === "取消") && h("span", { className: "scratch-badge" }, "取消"),
+        isUnavailableEntry(entry) && h("span", { className: "scratch-badge" }, normalizeResultStatus(entry.status) || "取消"),
         entry.raw && h("span", null, entry.raw)
       ),
       h("div", { className: "entry-grid" },
@@ -3747,6 +3854,10 @@ export function createKeibaApp(React, icons) {
       onSave(selectedValue, buildRaceResult(validation.validRows.map((row) => ({
         id: row.id,
         finish: String(row.finish || "").trim(),
+        status: String(row.status || "").trim(),
+        isScratched: Boolean(row.isScratched),
+        isExcluded: Boolean(row.isExcluded),
+        isStopped: Boolean(row.isStopped),
         frameNumber: String(row.frameNumber || "").trim(),
         horseNumber: String(row.horseNumber || "").trim(),
         horseName: String(row.horseName || "").trim(),
@@ -4087,7 +4198,7 @@ export function createKeibaApp(React, icons) {
     const info = race.raceInfo || {};
     const average = findAverageTime(averageTimes, info);
     const resultRows = sortResultRows(resultRowsFromRace(race, horseRecords));
-    const top3 = resultRows.slice(0, 3);
+    const top3 = resultRows.filter(isFinishedResultRow).slice(0, 3);
     const hasResult = hasRaceResult(race, horseRecords);
     const entries = safeArray(race.entries);
     const resultMeta = race.result || {};
@@ -4166,12 +4277,14 @@ export function createKeibaApp(React, icons) {
   }
   function ResultHorseCard({ row, compact = false, openHorse }) {
     const safeRow = sanitizeResultRow(row);
-    return h("button", { type: "button", className: `result-horse-card ${compact ? "compact" : ""}`, onClick: () => openHorse(safeRow.horseName || "") },
-      h("div", { className: "result-rank" }, `${safeRow.finish || "-"}着`),
+    const statusLabel = normalizeResultStatus(safeRow.status || safeRow.finish || "") || (safeRow.isScratched ? "取消" : safeRow.isExcluded ? "除外" : safeRow.isStopped ? "中止" : "");
+    const rankLabel = statusLabel || `${safeRow.finish || "-"}着`;
+    return h("button", { type: "button", className: `result-horse-card ${compact ? "compact" : ""} ${statusLabel ? "non-runner" : ""}`, onClick: () => openHorse(safeRow.horseName || "") },
+      h("div", { className: "result-rank" }, rankLabel),
       h("div", { className: "result-horse-body" },
-        h("div", { className: "horse-line-title" }, h(FrameHorseNumbers, { frame: safeRow.frameNumber, horseNumber: safeRow.horseNumber }), h("h4", null, safeRow.horseName || "馬名未入力")),
+        h("div", { className: "horse-line-title" }, h(FrameHorseNumbers, { frame: safeRow.frameNumber, horseNumber: safeRow.horseNumber }), h("h4", null, safeRow.horseName || "馬名未入力", statusLabel && h("span", { className: "scratch-badge inline" }, statusLabel))),
         h("p", null, [safeRow.sexAge, `${safeRow.jockey || "騎手未入力"} ${safeRow.carriedWeight || "-"}`, safeRow.popularity ? `人気${safeRow.popularity}` : ""].filter(Boolean).join(" / ")),
-        h("p", null, [safeRow.time || "タイム未入力", safeRow.margin ? `着差${safeRow.margin}` : "", safeRow.last3f ? `上がり${safeRow.last3f}` : "", `テン1F:${safeRow.firstFurlongEstimate || "-"}`].filter(Boolean).join(" / ")),
+        h("p", null, statusLabel ? "-" : [safeRow.time || "タイム未入力", safeRow.margin ? `着差${safeRow.margin}` : "", safeRow.last3f ? `上がり${safeRow.last3f}` : "", `テン1F:${safeRow.firstFurlongEstimate || "-"}`].filter(Boolean).join(" / ")),
         h("p", { className: "corner-line" }, [`3角${safeRow.corner3 || "-"}番手`, `4角${safeRow.corner4 || "-"}番手`].join(" / "))
       )
     );
@@ -4219,7 +4332,7 @@ export function createKeibaApp(React, icons) {
   }
 
   function buildCornerHighlightMap(result) {
-    return sortResultRows(resultRowsFromResult(result)).slice(0, 3).reduce((map, row) => {
+    return sortResultRows(resultRowsFromResult(result)).filter(isFinishedResultRow).slice(0, 3).reduce((map, row) => {
       if (!row.horseNumber) return map;
       map[String(row.horseNumber)] = row.frameNumber || inferFrameNumber(row.horseNumber, safeArray(result?.fullResults || result?.rows).length);
       return map;
@@ -4493,6 +4606,9 @@ export function createKeibaApp(React, icons) {
       ),
       h("div", { className: "result-grid" },
         h(Field, { label: "着順" }, h("input", { inputMode: "numeric", value: row.finish, onChange: (event) => updateRow(row.id, "finish", event.target.value) })),
+        h(Field, { label: "ステータス" }, h("select", { value: row.status || "", onChange: (event) => updateRow(row.id, "status", event.target.value) },
+          ["", "取消", "除外", "競走除外", "中止", "競走中止"].map((item) => h("option", { key: item, value: item }, item || "通常"))
+        )),
         h(Field, { label: "枠" }, h("input", { inputMode: "numeric", value: row.frameNumber || "", onChange: (event) => updateRow(row.id, "frameNumber", event.target.value) })),
         h(Field, { label: "馬番" }, h("input", { inputMode: "numeric", value: row.horseNumber || "", onChange: (event) => updateRow(row.id, "horseNumber", event.target.value) })),
         h(Field, { label: "馬名" }, h("input", { value: row.horseName, onChange: (event) => updateRow(row.id, "horseName", event.target.value) })),
@@ -4548,7 +4664,7 @@ export function createKeibaApp(React, icons) {
     const hasMemo = Boolean(latestMemo);
     const tags = hasMemo ? [...safeArray(latestMemo.troubleTags), ...safeArray(latestMemo.strongTags), ...safeArray(latestMemo.buyTags)] : [];
     const attention = latestMemo?.attention || "";
-    const isScratched = entry.isScratched || entry.status === "取消";
+    const isScratched = isUnavailableEntry(entry);
 
     return h("button", { className: `race-runner-card ${attention === "A" ? "attention-a" : ""}`, type: "button", onClick: onOpen },
       h("div", { className: "runner-main" },
@@ -5106,7 +5222,7 @@ export function createKeibaApp(React, icons) {
     const rating = latestMemo ? normalizeRating(latestMemo.rating || latestMemo.attention) : "";
     const tags = latestMemo ? [...new Set([...safeArray(latestMemo.tags), ...safeArray(latestMemo.troubleTags), ...safeArray(latestMemo.strongTags), ...safeArray(latestMemo.buyTags)])].filter(Boolean) : [];
     const recentRecords = records.slice(0, 10);
-    const isScratched = entry.isScratched || entry.status === "取消";
+    const isScratched = isUnavailableEntry(entry);
 
     return h("article", { className: `race-column-row ${isScratched ? "scratched" : ""}` },
       h("div", { className: "race-column-horse" },
@@ -5189,7 +5305,7 @@ export function createKeibaApp(React, icons) {
         ].filter(Boolean).map((item) => h("span", { key: item }, item)))
       ),
       h("div", { className: "pace-detail-list" }, rows.map(({ entry, note, bestFirstFurlong }) => {
-        const isScratched = entry.isScratched || entry.status === "取消";
+        const isScratched = isUnavailableEntry(entry);
         return h("article", { key: `${entry.horseNumber}-${entry.horseName}`, className: `pace-detail-card ${isScratched ? "scratched" : ""}` },
           h("div", { className: "pace-detail-head" },
             h(FrameHorseNumbers, { frame: entry.frameNumber || entry.frame, horseNumber: entry.horseNumber }),
@@ -5270,7 +5386,7 @@ export function createKeibaApp(React, icons) {
         ),
       factors.length > 0 && h("div", { className: "important-factor-detail-list" }, entries.map((entry) => {
         const context = getHorseFactorContext(entry, horseRecords, memos, cards);
-        const isScratched = entry.isScratched || entry.status === "取消";
+        const isScratched = isUnavailableEntry(entry);
         return h("article", { key: `${entry.horseNumber}-${entry.horseName}`, className: `important-factor-horse-card ${isScratched ? "scratched" : ""}` },
           h("div", { className: "pace-detail-head" },
             h(FrameHorseNumbers, { frame: entry.frameNumber || entry.frame, horseNumber: entry.horseNumber }),
@@ -5375,7 +5491,7 @@ export function createKeibaApp(React, icons) {
         ? h(EmptyState, { title: "参照対象レースなし", text: "前日＋同日の同競馬場・同馬場種別の登録済みレースがありません。" })
         : h("div", { className: "track-bias-detail-list" }, safeArray(summary.referenceRaces).map((raceItem) => {
           const raceInfo = raceItem.raceInfo || {};
-          const rows = sortResultRows(resultRowsFromRace(raceItem, horseRecords)).slice(0, 3);
+          const rows = sortResultRows(resultRowsFromRace(raceItem, horseRecords)).filter(isFinishedResultRow).slice(0, 3);
           return h("article", { key: raceItem.raceId || raceItem.id, className: "track-bias-race-card" },
             h("h3", null, `${formatDateSlash(raceInfo.raceDate)} ${raceInfo.track || "-"}${raceNumberLabel(raceInfo.raceNumber)} ${raceInfo.raceName || ""}`),
             h("p", { className: "muted-mini" }, [`${raceInfo.surface || ""}${raceInfo.distance || ""}${raceInfo.distance ? "m" : ""}`, raceInfo.going].filter(Boolean).join(" / ")),

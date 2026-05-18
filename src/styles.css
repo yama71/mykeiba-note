@@ -1776,6 +1776,11 @@ textarea:focus {
   padding: 9px;
 }
 
+.result-horse-card.non-runner {
+  background: #fbfaf7;
+  border-color: #d8d2c8;
+}
+
 .result-rank {
   padding: 8px 4px;
   border-radius: 8px;
@@ -1785,6 +1790,11 @@ textarea:focus {
   font-weight: 900;
   text-align: center;
   white-space: nowrap;
+}
+
+.result-horse-card.non-runner .result-rank {
+  color: #8f2b2b;
+  background: #fff1f1;
 }
 
 .frame-horse-numbers {
