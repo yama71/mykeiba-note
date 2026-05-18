@@ -1422,14 +1422,24 @@ function sanitizeRaceCard(race = {}) {
   const result = rawResult ? {
     ...rawResult,
     status: rawResult.status || "result_registered",
-    rows: safeArray(rawResult.fullResults || rawResult.rows || rawResult.results).map(sanitizeResultRow),
-    fullResults: safeArray(rawResult.fullResults || rawResult.rows || rawResult.results).map(sanitizeResultRow),
+    rows: safeArray(rawResult.fullResults || rawResult.rows || rawResult.results || rawResult.resultRows || rawResult.entriesResults).map(sanitizeResultRow),
+    fullResults: safeArray(rawResult.fullResults || rawResult.rows || rawResult.results || rawResult.resultRows || rawResult.entriesResults).map(sanitizeResultRow),
     top3: safeArray(rawResult.top3).length > 0
       ? safeArray(rawResult.top3).map(sanitizeResultRow).filter(isFinishedResultRow)
-      : [...safeArray(rawResult.fullResults || rawResult.rows || rawResult.results).map(sanitizeResultRow)]
+      : [...safeArray(rawResult.fullResults || rawResult.rows || rawResult.results || rawResult.resultRows || rawResult.entriesResults).map(sanitizeResultRow)]
         .filter(isFinishedResultRow)
         .sort((a, b) => resultSortValue(a) - resultSortValue(b))
         .slice(0, 3),
+    lapTimes: safeArray(rawResult.lapTimes || rawResult.laps || rawResult.raceLaps).map((lap) => safeString(lap)).filter(Boolean),
+    last4F: rawResult.last4F || rawResult.last4f || "",
+    last3F: rawResult.last3F || rawResult.back3F || rawResult.final3F || rawResult.last3f || "",
+    first3F: rawResult.first3F || rawResult.front3F || rawResult.firstThreeF || "",
+    threeFDiff: rawResult.threeFDiff || rawResult.paceDiff || rawResult.threeFDifference || "",
+    isFirst100mStart: Boolean(rawResult.isFirst100mStart),
+    firstFurlongBase: rawResult.firstFurlongBase || "",
+    firstFurlongCorner: rawResult.firstFurlongCorner || "",
+    firstFurlongTopHorseNumbers: safeArray(rawResult.firstFurlongTopHorseNumbers),
+    cornerPassages: normalizeCornerPassages(rawResult.cornerPassages || rawResult.cornerPassage || rawResult.corners || rawResult.cornerPositions || {}),
     averageWinningTime: rawResult.averageWinningTime || "",
     winningTime: rawResult.winningTime || "",
     paceBias: rawResult.paceBias || "判定材料不足",
@@ -1660,20 +1670,74 @@ function isSameRaceForResult(left = {}, right = {}) {
   return Boolean(leftParts.identityKey && rightParts.identityKey && leftParts.identityKey === rightParts.identityKey);
 }
 
+function normalizeCornerPassages(value = {}) {
+  const source = value && typeof value === "object" && !Array.isArray(value) ? value : {};
+  return ["1", "2", "3", "4"].reduce((passages, corner) => {
+    const text = safeString(source[corner] || source[`${corner}corner`] || source[`corner${corner}`] || source[`${corner}コーナー`] || "");
+    if (text.trim()) passages[corner] = text.trim();
+    return passages;
+  }, {});
+}
+
+function normalizeRaceResultDetails(candidate = {}) {
+  const raw = candidate?.result || candidate || {};
+  const rows = safeArray(raw.fullResults || raw.rows || raw.results || raw.resultRows || raw.entriesResults || candidate.fullResults || candidate.rows || candidate.results)
+    .map(sanitizeResultRow);
+  const sortedRows = sortResultRows(rows).filter(isFinishedResultRow);
+  const cornerPassages = normalizeCornerPassages(raw.cornerPassages || raw.cornerPassage || raw.corners || raw.cornerPositions || {});
+  const lapTimes = safeArray(raw.lapTimes || raw.laps || raw.raceLaps).map((lap) => safeString(lap)).filter(Boolean);
+  const first3F = safeString(raw.first3F || raw.front3F || raw.firstThreeF || "");
+  const last3F = safeString(raw.last3F || raw.back3F || raw.final3F || raw.last3f || "");
+  const threeFDiff = safeString(raw.threeFDiff || raw.paceDiff || raw.threeFDifference || "");
+  return {
+    ...raw,
+    status: raw.status || "result_registered",
+    rows,
+    fullResults: rows,
+    top3: safeArray(raw.top3).length > 0 ? safeArray(raw.top3).map(sanitizeResultRow).filter(isFinishedResultRow) : sortedRows.slice(0, 3),
+    lapTimes,
+    last4F: safeString(raw.last4F || raw.last4f || ""),
+    last3F,
+    first3F,
+    threeFDiff,
+    firstHalfTime: safeString(raw.firstHalfTime || ""),
+    secondHalfTime: safeString(raw.secondHalfTime || ""),
+    halfDiff: safeString(raw.halfDiff || ""),
+    cornerPassages,
+    winningTime: safeString(raw.winningTime || raw.winnerTime || sortedRows[0]?.time || ""),
+    paceBias: raw.paceBias || raw.paceBiasLabel || "",
+    trackTrend: raw.trackTrend || raw.trackBiasLabel || "",
+    paceBiasLabel: raw.paceBiasLabel || raw.paceBias || "",
+    trackBiasLabel: raw.trackBiasLabel || raw.trackTrend || "",
+    biasNote: raw.biasNote || "",
+  };
+}
+
 function resultRowsFromStoredResult(candidate = {}) {
-  const result = candidate?.result || candidate;
-  return safeArray(result?.fullResults || result?.rows || result?.results || candidate?.fullResults || candidate?.rows || candidate?.results).map(sanitizeResultRow);
+  return normalizeRaceResultDetails(candidate).fullResults;
+}
+
+function resultDetailScore(resultLike = {}) {
+  const result = normalizeRaceResultDetails(resultLike);
+  return result.fullResults.length * 10
+    + result.lapTimes.length * 4
+    + Object.keys(result.cornerPassages || {}).length * 4
+    + (result.first3F ? 2 : 0)
+    + (result.last3F ? 2 : 0)
+    + (result.last4F ? 1 : 0)
+    + (result.paceBiasLabel || result.trackBiasLabel ? 1 : 0);
 }
 
 function storedResultCandidates() {
-  const raceCardResults = readStorageArrayFlexible(RACE_STORAGE_KEY).filter((item) => item?.result || safeArray(item?.results).length > 0);
   const legacyResults = readStorageArrayFlexible("raceResults");
-  return [...raceCardResults, ...legacyResults];
+  const raceCardResults = readStorageArrayFlexible(RACE_STORAGE_KEY).filter((item) => item?.result || safeArray(item?.results).length > 0);
+  return [...legacyResults, ...raceCardResults];
 }
 
 function findStoredResultForRace(race = {}) {
   try {
-    return storedResultCandidates().find((candidate) => isSameRaceForResult(candidate, race) && resultRowsFromStoredResult(candidate).length > 0) || null;
+    const matches = storedResultCandidates().filter((candidate) => isSameRaceForResult(candidate, race) && resultRowsFromStoredResult(candidate).length > 0);
+    return matches.sort((a, b) => resultDetailScore(b) - resultDetailScore(a))[0] || null;
   } catch (error) {
     console.warn("findStoredResultForRace failed", error);
     return null;
@@ -1709,12 +1773,12 @@ function resultRowsFromHorseRecordsForRace(race = {}, horseRecords = []) {
 
 function findResultForRace(race = {}, horseRecords = []) {
   const safeRace = sanitizeRaceCard(race);
-  if (safeRace.result) return safeRace.result;
   const storedResult = findStoredResultForRace(safeRace);
-  if (storedResult) return storedResult.result || storedResult;
+  if (storedResult) return normalizeRaceResultDetails(storedResult);
+  if (safeRace.result) return normalizeRaceResultDetails(safeRace.result);
   const records = horseRecords.length > 0 ? horseRecords : loadJson(HORSE_RECORDS_STORAGE_KEY);
   const recordRows = resultRowsFromHorseRecordsForRace(safeRace, records);
-  return recordRows.length > 0 ? { status: "result_registered", rows: recordRows, fullResults: recordRows } : null;
+  return recordRows.length > 0 ? normalizeRaceResultDetails({ status: "result_registered", rows: recordRows, fullResults: recordRows }) : null;
 }
 
 function entriesForRaceFromStorage(race = {}) {
@@ -2004,6 +2068,29 @@ function upsertRaceCardInStorage(raceCard) {
   const next = [storageRace, ...current.filter((race) => !isSameRaceForResult(race, storageRace))];
   persistRaceCardsToStorage(next);
   return { storageRace, next };
+}
+
+function upsertLegacyRaceResult(race, result) {
+  const safeRace = sanitizeRaceCard({ ...race, result, status: "result_registered" });
+  const detail = normalizeRaceResultDetails(result);
+  const current = readStorageArrayFlexible("raceResults");
+  const record = {
+    id: safeRace.raceId || safeRace.id,
+    raceId: safeRace.raceId || safeRace.id,
+    date: safeRace.date || safeRace.raceInfo?.raceDate || "",
+    racecourse: safeRace.racecourse || safeRace.raceInfo?.track || "",
+    raceNumber: safeRace.raceNumber || safeRace.raceInfo?.raceNumber || "",
+    raceName: safeRace.raceName || safeRace.raceInfo?.raceName || "",
+    raceClass: safeRace.raceClass || safeRace.raceInfo?.raceClass || "",
+    surface: safeRace.surface || safeRace.raceInfo?.surface || "",
+    distance: safeRace.distance || safeRace.raceInfo?.distance || "",
+    going: safeRace.going || safeRace.raceInfo?.going || "",
+    result: detail,
+    status: "result_registered",
+    updatedAt: new Date().toISOString(),
+  };
+  saveJson("raceResults", [record, ...current.filter((item) => !isSameRaceForResult(item, record))]);
+  return record;
 }
 
 function verifyStoredRaceCard(raceId, expectedEntryCount) {
@@ -3554,6 +3641,7 @@ export function createKeibaApp(React, icons) {
       const updatedRace = sanitizeRaceCard({ ...(targetRace || {}), id: raceId, raceId, raceInfo: { ...(targetRace?.raceInfo || {}), ...raceInfoPatch }, result, status: "result_registered" });
       const nextCards = [updatedRace, ...sanitizeRaceCards(allRaceCards).filter((race) => race.id !== updatedRace.id && race.raceId !== updatedRace.raceId)];
       persistRaceCardsToStorage(nextCards);
+      upsertLegacyRaceResult(updatedRace, result);
       setRaceCards(nextCards);
       notify("レース結果を保存しました");
       navigate("race");
@@ -4501,7 +4589,8 @@ export function createKeibaApp(React, icons) {
     const top3 = resultRows.filter(isFinishedResultRow).slice(0, 3);
     const hasResult = hasRaceResult(raceWithResult, horseRecords);
     const entries = safeArray(race.entries);
-    const resultMeta = linkedResult || race.result || {};
+    const resultMeta = hasResult ? normalizeRaceResultDetails(linkedResult || race.result || {}) : {};
+    const displayEntryCount = raceDisplayEntryCount(raceWithResult, resultRows);
     const renderAverage = () => h("section", { className: "race-detail-panel" },
       h("h3", null, "平均タイム"),
       h("strong", null, average ? average.averageTime : "平均タイム未登録"),
@@ -4527,7 +4616,7 @@ export function createKeibaApp(React, icons) {
       info.raceClass,
       `${info.surface || ""}${info.distance || "-"}m`,
       info.courseType,
-      `${entries.length}頭`,
+      displayEntryCount > 0 ? `${displayEntryCount}頭` : (hasResult ? "出走表なし" : "0頭"),
       info.going,
       info.weather ? `天気:${info.weather}` : "",
       info.turfGoing ? `芝:${info.turfGoing}` : "",
@@ -4591,37 +4680,42 @@ export function createKeibaApp(React, icons) {
   }
 
   function RaceLapPanel({ result, raceInfo = {} }) {
-    const laps = safeArray(result?.lapTimes).filter(Boolean);
-    const threeF = result?.first3F || result?.threeFDiff
+    const safeResult = normalizeRaceResultDetails(result || {});
+    const laps = safeArray(safeResult?.lapTimes).filter(Boolean);
+    const threeF = safeResult?.first3F || safeResult?.threeFDiff
       ? {
-        first3F: result.first3F || "",
-        last3F: result.last3F || "",
-        threeFDiff: result.threeFDiff || "",
-        isFirst100mStart: Boolean(result.isFirst100mStart),
+        first3F: safeResult.first3F || "",
+        last3F: safeResult.last3F || "",
+        threeFDiff: safeResult.threeFDiff || "",
+        isFirst100mStart: Boolean(safeResult.isFirst100mStart),
       }
-      : calculateThreeFTimes(laps, raceInfo.distance, result?.last3F || "");
-    const hasLapInfo = laps.length > 0 || result?.last4F || result?.last3F || threeF.first3F || threeF.last3F;
-    if (!hasLapInfo) return null;
+      : calculateThreeFTimes(laps, raceInfo.distance, safeResult?.last3F || "");
+    const hasLapInfo = laps.length > 0 || safeResult?.last4F || safeResult?.last3F || threeF.first3F || threeF.last3F;
     return h("section", { className: "race-detail-panel race-lap-panel" },
       h("h3", null, "\u30ec\u30fc\u30b9\u30e9\u30c3\u30d7"),
+      !hasLapInfo && h("p", { className: "muted-mini" }, "\u30e9\u30c3\u30d7\u30bf\u30a4\u30e0\u306a\u3057"),
       laps.length > 0 && h("p", { className: "lap-line" }, laps.join(" - ")),
-      h("div", { className: "lap-summary-grid" },
-        h("span", null, h("small", null, "\u524d\u534a3F"), h("strong", null, threeF.first3F || "-")),
-        h("span", null, h("small", null, "\u5f8c\u534a3F"), h("strong", null, threeF.last3F || "-")),
-        h("span", null, h("small", null, "\u524d\u5f8c\u534a3F\u5dee"), h("strong", null, threeF.threeFDiff || "-")),
-        h("span", null, h("small", null, "\u4e0a\u308a4F"), h("strong", null, result.last4F || "-")),
-        h("span", null, h("small", null, "\u4e0a\u308a3F"), h("strong", null, result.last3F || "-"))
+      hasLapInfo && h("div", { className: "lap-summary-grid" },
+        h("span", null, h("small", null, "\u524d3F"), h("strong", null, threeF.first3F || "-")),
+        h("span", null, h("small", null, "\u5f8c3F"), h("strong", null, threeF.last3F || "-")),
+        h("span", null, h("small", null, "\u524d\u5f8c\u534a\u5dee"), h("strong", null, threeF.threeFDiff || "-")),
+        h("span", null, h("small", null, "\u4e0a\u308a4F"), h("strong", null, safeResult.last4F || "-")),
+        h("span", null, h("small", null, "\u4e0a\u308a3F"), h("strong", null, safeResult.last3F || "-"))
       ),
       laps.length > 0 && h("p", { className: "lap-note" }, `100m\u59cb\u307e\u308a\u8ddd\u96e2\uff1a${threeF.isFirst100mStart ? "\u306f\u3044" : "\u3044\u3044\u3048"}`),
-      safeArray(result.firstFurlongTopHorseNumbers).length > 0 && h("p", { className: "lap-note" }, `\u30c6\u30f31F\u4e0a\u4f4d5\u982d: ${safeArray(result.firstFurlongTopHorseNumbers).join(", ")}`)
+      safeArray(safeResult.firstFurlongTopHorseNumbers).length > 0 && h("p", { className: "lap-note" }, `\u30c6\u30f31F\u4e0a\u4f4d5\u982d: ${safeArray(safeResult.firstFurlongTopHorseNumbers).join(", ")}`)
     );
   }
 
   function CornerPassagePanel({ result }) {
-    const passages = result?.cornerPassages || {};
+    const safeResult = normalizeRaceResultDetails(result || {});
+    const passages = safeResult?.cornerPassages || {};
     const corners = ["1", "2", "3", "4"].filter((corner) => String(passages[corner] || "").trim());
-    if (corners.length === 0) return null;
-    const highlightMap = buildCornerHighlightMap(result);
+    if (corners.length === 0) return h("section", { className: "race-detail-panel corner-passage-panel" },
+      h("h3", null, "\u30b3\u30fc\u30ca\u30fc\u901a\u904e\u9806\u4f4d"),
+      h("p", { className: "muted-mini" }, "\u30b3\u30fc\u30ca\u30fc\u901a\u904e\u9806\u4f4d\u306a\u3057")
+    );
+    const highlightMap = buildCornerHighlightMap(safeResult);
     return h("section", { className: "race-detail-panel corner-passage-panel" },
       h("h3", null, "コーナー通過順位"),
       corners.map((corner) => h("div", { key: corner, className: "corner-passage-row" },
@@ -4632,15 +4726,17 @@ export function createKeibaApp(React, icons) {
   }
 
   function buildCornerHighlightMap(result) {
-    return sortResultRows(resultRowsFromResult(result)).filter(isFinishedResultRow).slice(0, 3).reduce((map, row) => {
+    const safeResult = normalizeRaceResultDetails(result || {});
+    return sortResultRows(resultRowsFromResult(safeResult)).filter(isFinishedResultRow).slice(0, 3).reduce((map, row) => {
       if (!row.horseNumber) return map;
-      map[String(row.horseNumber)] = row.frameNumber || inferFrameNumber(row.horseNumber, safeArray(result?.fullResults || result?.rows).length);
+      map[String(row.horseNumber)] = row.frameNumber || inferFrameNumber(row.horseNumber, safeArray(safeResult?.fullResults || safeResult?.rows).length);
       return map;
     }, {});
   }
 
   function resultRowsFromResult(result) {
-    return enrichRowsWithFirstFurlong(result?.fullResults || result?.rows || result?.top3, result);
+    const safeResult = normalizeRaceResultDetails(result || {});
+    return enrichRowsWithFirstFurlong(safeResult?.fullResults || safeResult?.rows || safeResult?.top3, safeResult);
   }
 
   function renderCornerPassageTokens(passage, highlightMap) {
