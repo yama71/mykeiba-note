@@ -994,10 +994,13 @@ function numericDistanceFromRaceInfo(source = {}) {
 
 function isFukushimaDirt1150Race(source = {}) {
   if (typeof source === "number" || typeof source === "string") return false;
-  const racecourse = safeString(raceInfoValue(source, ["racecourse", "track", "course", "place", "venue"]), "");
+  const raceIdText = safeString(raceInfoValue(source, ["raceId", "id"]), "");
+  const racecourse = safeString(raceInfoValue(source, ["racecourse", "track", "course", "place", "venue"]) || extractRacecourseFromText(raceIdText), "");
   const surface = safeString(raceInfoValue(source, ["surface", "courseType"]), "");
   const distance = numericDistanceFromRaceInfo(source);
-  return distance === 1150 && racecourse.includes("\u798f\u5cf6") && surface.includes("\u30c0");
+  const isFukushima = racecourse.includes("\u798f\u5cf6") || racecourse.includes("遖丞ｳｶ");
+  const isDirt = surface.includes("\u30c0") || surface.includes("繝");
+  return distance === 1150 && isFukushima && isDirt;
 }
 
 function lapDistancesForRace(lapTimes, raceInfoOrDistance) {
