@@ -1786,11 +1786,12 @@ function recalculateFukushimaDirt1150Result(resultLike = {}, raceInfo = {}) {
     firstFurlongBase,
     firstFurlongTopHorseNumbers,
   });
+  const fallbackFirstFurlong = firstFurlongBase || "";
   const rows = safeArray(result.fullResults).map(sanitizeResultRow).map((row) => ({
     ...row,
     firstFurlongEstimate: isResultNonRunner(row) || isResultStopped(row)
       ? "-"
-      : firstFurlongMap[String(row.horseNumber || "")] || row.firstFurlongEstimate || "-",
+      : firstFurlongMap[String(row.horseNumber || "")] || fallbackFirstFurlong || row.firstFurlongEstimate || "-",
   }));
   const sortedRows = sortResultRows(rows).filter(isFinishedResultRow);
 
@@ -1945,6 +1946,35 @@ function recalculateFukushimaDirt1150Collections(raceCards = [], legacyResults =
   });
 
   return { raceCards: safeRaceCards, legacyResults: nextLegacyResults, horseRecords: nextHorseRecords, changed };
+}
+
+function migrateFukushimaDirt1150LapStorage() {
+  try {
+    const allRaceCards = getAllRaceCards();
+    const legacyResults = readStorageArrayFlexible("raceResults");
+    const horseRecords = loadJson(HORSE_RECORDS_STORAGE_KEY);
+    const recalculated = recalculateFukushimaDirt1150Collections(allRaceCards, legacyResults, horseRecords);
+    if (!recalculated.changed) return {
+      changed: false,
+      raceCards: allRaceCards,
+      legacyResults,
+      horseRecords,
+    };
+
+    persistRaceCardsToStorage(recalculated.raceCards);
+    saveJson("raceResults", recalculated.legacyResults);
+    saveJson(HORSE_RECORDS_STORAGE_KEY, recalculated.horseRecords);
+    return recalculated;
+  } catch (error) {
+    console.warn("migrateFukushimaDirt1150LapStorage failed", error);
+    return {
+      changed: false,
+      raceCards: getAllRaceCards(),
+      legacyResults: readStorageArrayFlexible("raceResults"),
+      horseRecords: loadJson(HORSE_RECORDS_STORAGE_KEY),
+      error,
+    };
+  }
 }
 
 function isEntryRowLike(item) {
@@ -3479,9 +3509,12 @@ export function createKeibaApp(React, icons) {
       }
     }, [skipNextRaceSave]);
     useEffect(() => {
-      const allRaceCards = getAllRaceCards();
+      const migrated = migrateFukushimaDirt1150LapStorage();
+      const allRaceCards = migrated.raceCards || getAllRaceCards();
       const mainRaceCards = normalizeStoredRaceCards(loadJson(RACE_STORAGE_KEY));
-      const recalculated = recalculateFukushimaDirt1150Collections(allRaceCards, loadJson("raceResults"), horseRecords);
+      const recalculated = migrated.changed
+        ? migrated
+        : recalculateFukushimaDirt1150Collections(allRaceCards, loadJson("raceResults"), horseRecords);
       const nextRaceCards = recalculated.raceCards.length > 0 ? recalculated.raceCards : allRaceCards;
       if (allRaceCards.length > mainRaceCards.length || recalculated.changed) persistRaceCardsToStorage(nextRaceCards);
       if (recalculated.changed) {
