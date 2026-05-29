@@ -983,8 +983,10 @@ function raceInfoValue(source = {}, keys = []) {
   if (source == null) return "";
   if (typeof source !== "object") return "";
   const raceInfo = source.raceInfo && typeof source.raceInfo === "object" ? source.raceInfo : {};
+  const nestedRace = source.race && typeof source.race === "object" ? source.race : {};
+  const nestedRaceCard = source.raceCard && typeof source.raceCard === "object" ? source.raceCard : {};
   for (const key of keys) {
-    const value = source[key] ?? raceInfo[key];
+    const value = source[key] ?? raceInfo[key] ?? nestedRace[key] ?? nestedRaceCard[key];
     if (value != null && value !== "") return value;
   }
   return "";
@@ -994,18 +996,39 @@ function numericDistanceFromRaceInfo(source = {}) {
   if (typeof source === "number" || typeof source === "string") {
     return Number(String(source || "").replace(/[^\d.]/g, ""));
   }
-  return Number(String(raceInfoValue(source, ["distance", "raceDistance", "meters"]) || "").replace(/[^\d.]/g, ""));
+  return Number(String(raceInfoValue(source, ["distance", "raceDistance", "meters", "distanceText", "course", "courseText", "condition"]) || "").replace(/[^\d.]/g, ""));
+}
+
+function raceInfoSearchText(source = {}) {
+  if (source == null) return "";
+  if (typeof source === "string" || typeof source === "number") return String(source || "");
+  const raceInfo = source.raceInfo && typeof source.raceInfo === "object" ? source.raceInfo : {};
+  const nestedRace = source.race && typeof source.race === "object" ? source.race : {};
+  const nestedRaceCard = source.raceCard && typeof source.raceCard === "object" ? source.raceCard : {};
+  return [
+    source.raceId, source.id, source.racecourse, source.track, source.course, source.place, source.venue, source.surface,
+    source.courseType, source.distance, source.distanceText, source.courseText, source.condition,
+    raceInfo.raceId, raceInfo.id, raceInfo.racecourse, raceInfo.track, raceInfo.course, raceInfo.place, raceInfo.venue, raceInfo.surface,
+    raceInfo.courseType, raceInfo.distance, raceInfo.distanceText, raceInfo.courseText, raceInfo.condition,
+    nestedRace.raceId, nestedRace.id, nestedRace.racecourse, nestedRace.track, nestedRace.course, nestedRace.place, nestedRace.venue, nestedRace.surface,
+    nestedRace.courseType, nestedRace.distance, nestedRace.distanceText, nestedRace.courseText, nestedRace.condition,
+    nestedRaceCard.raceId, nestedRaceCard.id, nestedRaceCard.racecourse, nestedRaceCard.track, nestedRaceCard.course, nestedRaceCard.place, nestedRaceCard.venue, nestedRaceCard.surface,
+    nestedRaceCard.courseType, nestedRaceCard.distance, nestedRaceCard.distanceText, nestedRaceCard.courseText, nestedRaceCard.condition,
+  ].map((value) => safeString(value, "")).filter(Boolean).join(" ");
 }
 
 function isFukushimaDirt1150Race(source = {}) {
   if (typeof source === "number" || typeof source === "string") return false;
   const raceIdText = safeString(raceInfoValue(source, ["raceId", "id"]), "");
-  const racecourse = safeString(raceInfoValue(source, ["racecourse", "track", "course", "place", "venue"]) || extractRacecourseFromText(raceIdText), "");
-  const surface = safeString(raceInfoValue(source, ["surface", "courseType"]), "");
+  const racecourse = safeString(raceInfoValue(source, ["racecourse", "track", "place", "venue"]) || extractRacecourseFromText(raceIdText), "");
+  const surface = safeString(raceInfoValue(source, ["surface", "courseType", "course", "courseText", "distanceText", "condition"]), "");
   const distance = numericDistanceFromRaceInfo(source);
+  const searchText = raceInfoSearchText(source);
   const isFukushima = racecourse.includes("\u798f\u5cf6") || racecourse.includes("遖丞ｳｶ");
   const isDirt = surface.includes("\u30c0") || surface.includes("繝");
-  return distance === 1150 && isFukushima && isDirt;
+  return distance === 1150
+    && (isFukushima || searchText.includes("\u798f\u5cf6") || searchText.includes("驕紋ｸ橸ｽｳ・ｶ"))
+    && (isDirt || searchText.includes("\u30c0") || searchText.includes("郢敖"));
 }
 
 function rawRaceResultSource(resultLike = {}) {
@@ -4155,11 +4178,14 @@ export function createKeibaApp(React, icons) {
         const allRaceCards = loadRaceCardsFromStorage();
         const targetRace = sanitizeRaceCards([...raceCards, ...allRaceCards]).find((race) => race.id === raceId || race.raceId === raceId);
         const raceForRecord = targetRace ? { ...targetRace, raceInfo: { ...targetRace.raceInfo, ...raceInfoPatch } } : null;
-        const nextHorseRecords = targetRace ? upsertHorseRecords(horseRecords, raceForRecord, result) : horseRecords;
-        const updatedRace = sanitizeRaceCard({ ...(targetRace || {}), id: raceId, raceId, raceInfo: { ...(targetRace?.raceInfo || {}), ...raceInfoPatch }, result, status: "result_registered" });
+        const resultForSave = raceForRecord
+          ? recalculateFukushimaDirt1150Result(result, raceForRecord)
+          : normalizeRaceResultDetails(result);
+        const nextHorseRecords = targetRace ? upsertHorseRecords(horseRecords, raceForRecord, resultForSave) : horseRecords;
+        const updatedRace = sanitizeRaceCard({ ...(targetRace || {}), id: raceId, raceId, raceInfo: { ...(targetRace?.raceInfo || {}), ...raceInfoPatch }, result: resultForSave, status: "result_registered" });
         const nextCards = [updatedRace, ...sanitizeRaceCards(allRaceCards).filter((race) => race.id !== updatedRace.id && race.raceId !== updatedRace.raceId)];
         persistRaceCardsToStorage(nextCards);
-        upsertLegacyRaceResult(updatedRace, result);
+        upsertLegacyRaceResult(updatedRace, resultForSave);
         saveJson(HORSE_RECORDS_STORAGE_KEY, nextHorseRecords);
         setHorseRecords(nextHorseRecords);
         setRaceCards(nextCards);
