@@ -2566,7 +2566,8 @@ function enrichRowsWithFirstFurlong(rows, resultMeta) {
     .map(sanitizeResultRow)
     .map((row) => ({
       ...row,
-      firstFurlongEstimate: row.firstFurlongEstimate && row.firstFurlongEstimate !== "-" ? row.firstFurlongEstimate : firstFurlongMap[String(row.horseNumber || "")] || "-",
+      firstFurlongEstimate: firstFurlongMap[String(row.horseNumber || "")]
+        || (row.firstFurlongEstimate && row.firstFurlongEstimate !== "-" ? row.firstFurlongEstimate : "-"),
     }));
 }
 
