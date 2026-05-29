@@ -4881,9 +4881,14 @@ export function createKeibaApp(React, icons) {
   }
 
   function RaceLapPanel({ result, raceInfo = {} }) {
-    const safeResult = normalizeRaceResultDetails(result || {});
+    const isFukushima1150 = isFukushimaDirt1150Race(raceInfo);
+    const safeResult = isFukushima1150
+      ? recalculateFukushimaDirt1150Result(result || {}, raceInfo)
+      : normalizeRaceResultDetails(result || {});
     const laps = safeArray(safeResult?.lapTimes).filter(Boolean);
-    const threeF = safeResult?.first3F || safeResult?.threeFDiff
+    const threeF = isFukushima1150
+      ? calculateThreeFTimes(laps, raceInfo, safeResult?.last3F || "")
+      : (safeResult?.first3F || safeResult?.threeFDiff)
       ? {
         first3F: safeResult.first3F || "",
         last3F: safeResult.last3F || "",
