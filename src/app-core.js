@@ -1776,6 +1776,7 @@ function recalculateFukushimaDirt1150Result(resultLike = {}, raceInfo = {}) {
   const result = normalizeRaceResultDetails(resultLike);
   if (!isFukushimaDirt1150Race(raceInfo) || result.lapTimes.length === 0) return result;
 
+  const oldFirstFurlong = result.firstFurlongBase || safeArray(result.fullResults).find((row) => row.firstFurlongEstimate && row.firstFurlongEstimate !== "-")?.firstFurlongEstimate || "";
   const threeF = calculateThreeFTimes(result.lapTimes, raceInfo, result.last3F);
   const firstFurlongBase = calculateFirstFurlongBase(result.lapTimes, raceInfo);
   const firstFurlongCorner = result.firstFurlongCorner || firstExistingCorner(result.cornerPassages);
@@ -1794,6 +1795,9 @@ function recalculateFukushimaDirt1150Result(resultLike = {}, raceInfo = {}) {
       : firstFurlongMap[String(row.horseNumber || "")] || fallbackFirstFurlong || row.firstFurlongEstimate || "-",
   }));
   const sortedRows = sortResultRows(rows).filter(isFinishedResultRow);
+  if (oldFirstFurlong && firstFurlongBase && oldFirstFurlong !== firstFurlongBase) {
+    console.info(`Fukushima1150 recalculated: raceId=${raceInfo.raceId || raceInfo.id || ""}, oldTen1F=${oldFirstFurlong}, newTen1F=${firstFurlongBase}`);
+  }
 
   return {
     ...result,
@@ -1856,6 +1860,9 @@ function findStoredResultForRace(race = {}) {
 }
 
 function resultRowsFromHorseRecordsForRace(race = {}, horseRecords = []) {
+  const safeRace = sanitizeRaceCard(race);
+  const linkedResult = isFukushimaDirt1150Race(safeRace) ? recalculateFukushimaDirt1150Result(findStoredResultForRace(safeRace) || safeRace.result || {}, safeRace) : null;
+  const firstFurlongMap = buildFirstFurlongMap(linkedResult || {});
   return safeArray(horseRecords)
     .filter((record) => isSameRaceForResult(record, race))
     .map((record) => sanitizeResultRow({
@@ -1877,7 +1884,10 @@ function resultRowsFromHorseRecordsForRace(race = {}, horseRecords = []) {
       last3f: record.last3f,
       corner3: record.corner3,
       corner4: record.corner4,
-      firstFurlongEstimate: record.firstFurlongEstimate || "-",
+      firstFurlongEstimate: firstFurlongMap[String(record.horseNumber || "")]
+        || linkedResult?.firstFurlongBase
+        || record.firstFurlongEstimate
+        || "-",
       parsed: true,
     }));
 }
@@ -1940,9 +1950,11 @@ function recalculateFukushimaDirt1150Collections(raceCards = [], legacyResults =
       const sameName = normalizeHorseName(row.horseName) && normalizeHorseName(row.horseName) === normalizeHorseName(record.horseName);
       return sameNumber || sameName;
     });
-    if (!matchedRow || matchedRow.firstFurlongEstimate === record.firstFurlongEstimate) return record;
+    const nextFirstFurlong = matchedRow?.firstFurlongEstimate || recalculated?.firstFurlongBase || "";
+    if (!nextFirstFurlong || nextFirstFurlong === record.firstFurlongEstimate) return record;
+    console.info(`Fukushima1150 recalculated: raceId=${record.raceId || ""}, horse=${record.horseName || ""}, oldTen1F=${record.firstFurlongEstimate || "-"}, newTen1F=${nextFirstFurlong}`);
     changed = true;
-    return { ...record, firstFurlongEstimate: matchedRow.firstFurlongEstimate || "-" };
+    return { ...record, firstFurlongEstimate: nextFirstFurlong };
   });
 
   return { raceCards: safeRaceCards, legacyResults: nextLegacyResults, horseRecords: nextHorseRecords, changed };
