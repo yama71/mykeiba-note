@@ -1055,6 +1055,10 @@ function calculateSegmentTime(lapTimes, lapDistances, startMeter, endMeter) {
   return total > 0 ? total : "";
 }
 
+function calculateTimeRange(lapTimes, lapDistances, startMeter, endMeter) {
+  return calculateSegmentTime(lapTimes, lapDistances, startMeter, endMeter);
+}
+
 function calculateThreeFTimes(lapTimes, raceInfoOrDistance, officialLast3F = "") {
   const lapData = lapDataForRace(lapTimes, raceInfoOrDistance);
   const laps = lapData.laps;
@@ -1081,14 +1085,9 @@ function isFirst100mDistance(distance) {
 }
 
 function calculateFirstFurlongBase(lapTimes, raceInfoOrDistance) {
-  const laps = safeArray(lapTimes).map((value) => Number(value)).filter((value) => Number.isFinite(value));
-  if (laps.length === 0) return "";
-  const numericDistance = numericDistanceFromRaceInfo(raceInfoOrDistance);
-  const base = isFukushimaDirt1150Race(raceInfoOrDistance)
-    ? laps[0] * 2
-    : isFirst100mDistance(numericDistance) && laps.length > 1
-      ? laps[0] + laps[1] / 2
-      : laps[0];
+  const lapData = lapDataForRace(lapTimes, raceInfoOrDistance);
+  if (lapData.laps.length === 0) return "";
+  const base = calculateTimeRange(lapData.laps, lapData.distances, 0, 200);
   return Number.isFinite(base) ? base.toFixed(1) : "";
 }
 
