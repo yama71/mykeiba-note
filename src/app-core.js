@@ -1171,6 +1171,13 @@ function calculateThreeFTimes(lapTimes, raceInfoOrDistance, officialLast3F = "")
   };
 }
 
+function calculateLast4FTime(lapTimes, raceInfoOrDistance) {
+  const lapData = lapDataForRace(lapTimes, raceInfoOrDistance);
+  if (lapData.laps.length === 0 || lapData.totalDistance < 800) return "";
+  const value = calculateSegmentTime(lapData.laps, lapData.distances, lapData.totalDistance - 800, lapData.totalDistance);
+  return formatLapSeconds(value);
+}
+
 function isFirst100mDistance(distance) {
   const numeric = Number(distance);
   return Number.isFinite(numeric) && numeric > 0 && numeric % 200 === 100;
@@ -1869,6 +1876,7 @@ function recalculateFukushimaDirt1150Result(resultLike = {}, raceInfo = {}) {
   const oldFirstFurlong = result.firstFurlongBase || safeArray(result.fullResults).find((row) => row.firstFurlongEstimate && row.firstFurlongEstimate !== "-")?.firstFurlongEstimate || "";
   const threeF = calculateThreeFTimes(result.lapTimes, calcInfo, result.last3F);
   const firstFurlongBase = calculateFirstFurlongBase(result.lapTimes, calcInfo);
+  const last4F = calculateLast4FTime(result.lapTimes, calcInfo);
   const firstFurlongCorner = result.firstFurlongCorner || firstExistingCorner(result.cornerPassages);
   const firstFurlongTopHorseNumbers = safeArray(result.firstFurlongTopHorseNumbers).length > 0
     ? safeArray(result.firstFurlongTopHorseNumbers).map((value) => String(value))
@@ -1900,12 +1908,14 @@ function recalculateFukushimaDirt1150Result(resultLike = {}, raceInfo = {}) {
     back3F: threeF.last3F || result.back3F,
     threeFDiff: threeF.threeFDiff || result.threeFDiff,
     paceDiff: threeF.threeFDiff || result.paceDiff,
+    last4F: last4F || result.last4F,
     lapStats: {
       ...(result.lapStats || {}),
       front3F: threeF.first3F || result.lapStats?.front3F,
       first3F: threeF.first3F || result.lapStats?.first3F,
       back3F: threeF.last3F || result.lapStats?.back3F,
       last3F: threeF.last3F || result.lapStats?.last3F,
+      last4F: last4F || result.lapStats?.last4F,
       ten1F: firstFurlongBase || result.lapStats?.ten1F,
       firstFurlong: firstFurlongBase || result.lapStats?.firstFurlong,
     },
@@ -2110,6 +2120,122 @@ function migrateFukushimaDirt1150LapStorage() {
       error,
     };
   }
+}
+
+function forceRecalculateFukushimaDirt1150RaceStorage(targetRace = {}, horseRecords = []) {
+  const safeRace = sanitizeRaceCard(targetRace);
+  const storedResult = findStoredResultForRace(safeRace) || safeRace.result;
+  if (!storedResult) return { ok: false, reason: "result-not-found" };
+  if (!shouldForceFukushima1150DisplayFromLaps(storedResult?.result || storedResult, safeRace)) {
+    return { ok: false, reason: "not-fukushima-dirt-1150" };
+  }
+
+  const before = normalizeRaceResultDetails(storedResult?.result || storedResult);
+  const recalculated = recalculateFukushimaDirt1150Result(storedResult?.result || storedResult, safeRace);
+  const beforeFirst3F = before.first3F || before.front3F || before.lapStats?.front3F || "-";
+  const beforeTen1F = before.firstFurlongBase
+    || before.ten1F
+    || before.lapStats?.ten1F
+    || safeArray(before.fullResults).find((row) => row.firstFurlongEstimate && row.firstFurlongEstimate !== "-")?.firstFurlongEstimate
+    || "-";
+
+  console.info(`before front3F=${beforeFirst3F}`);
+  console.info(`after front3F=${recalculated.first3F || "-"}`);
+  console.info(`before ten1F=${beforeTen1F}`);
+  console.info(`after ten1F=${recalculated.firstFurlongBase || "-"}`);
+  console.info("Fukushima1150 manual recalculation fields", {
+    raceId: safeRace.raceId || safeRace.id || recalculated.raceId || "",
+    updatedFields: [
+      "first3F",
+      "front3F",
+      "last3F",
+      "back3F",
+      "threeFDiff",
+      "paceDiff",
+      "last4F",
+      "lapStats.front3F",
+      "lapStats.first3F",
+      "lapStats.back3F",
+      "lapStats.last3F",
+      "lapStats.last4F",
+      "lapStats.ten1F",
+      "firstFurlongBase",
+      "fullResults[].firstFurlongEstimate",
+    ],
+  });
+
+  const allRaceCards = getAllRaceCards();
+  const nextRaceCards = sanitizeRaceCards(allRaceCards).map((race) => {
+    if (!isSameRaceForResult(race, safeRace)) return race;
+    const nextResult = race.result ? recalculateFukushimaDirt1150Result(race.result, race) : recalculated;
+    return {
+      ...race,
+      result: nextResult,
+      status: "result_registered",
+      updatedAt: new Date().toISOString(),
+    };
+  });
+  persistRaceCardsToStorage(nextRaceCards);
+
+  const legacyResults = readStorageArrayFlexible("raceResults");
+  const hasLegacyMatch = legacyResults.some((item) => isSameRaceForResult(item, safeRace));
+  const nextLegacyResults = hasLegacyMatch
+    ? legacyResults.map((item) => {
+      if (!isSameRaceForResult(item, safeRace)) return item;
+      return item?.result
+        ? { ...item, result: recalculated, status: "result_registered", updatedAt: new Date().toISOString() }
+        : { ...item, ...recalculated, status: "result_registered", updatedAt: new Date().toISOString() };
+    })
+    : [{
+      id: safeRace.raceId || safeRace.id || recalculated.raceId || "",
+      raceId: safeRace.raceId || safeRace.id || recalculated.raceId || "",
+      date: safeRace.date || safeRace.raceInfo?.raceDate || "",
+      racecourse: safeRace.racecourse || safeRace.raceInfo?.track || "福島",
+      raceNumber: safeRace.raceNumber || safeRace.raceInfo?.raceNumber || "",
+      raceName: safeRace.raceName || safeRace.raceInfo?.raceName || "",
+      raceClass: safeRace.raceClass || safeRace.raceInfo?.raceClass || "",
+      surface: safeRace.surface || safeRace.raceInfo?.surface || "ダート",
+      distance: safeRace.distance || safeRace.raceInfo?.distance || "1150",
+      going: safeRace.going || safeRace.raceInfo?.going || "",
+      result: recalculated,
+      status: "result_registered",
+      updatedAt: new Date().toISOString(),
+    }, ...legacyResults];
+  saveJson("raceResults", nextLegacyResults);
+
+  const firstFurlongMap = buildFirstFurlongMap(recalculated);
+  const nextHorseRecords = safeArray(horseRecords.length ? horseRecords : loadJson(HORSE_RECORDS_STORAGE_KEY)).map((record) => {
+    if (!isSameRaceForResult(record, safeRace)) return record;
+    const matchedRow = safeArray(recalculated.fullResults).find((row) => {
+      const sameNumber = safeString(row.horseNumber) && safeString(row.horseNumber) === safeString(record.horseNumber);
+      const sameName = normalizeHorseName(row.horseName) && normalizeHorseName(row.horseName) === normalizeHorseName(record.horseName);
+      return sameNumber || sameName;
+    });
+    const nextFirstFurlong = matchedRow?.firstFurlongEstimate
+      || firstFurlongMap[String(record.horseNumber || "")]
+      || recalculated.firstFurlongBase
+      || record.firstFurlongEstimate
+      || "-";
+    return {
+      ...record,
+      firstFurlongEstimate: nextFirstFurlong,
+      first3F: recalculated.first3F || record.first3F,
+      last3F: recalculated.last3F || record.last3F,
+      threeFDiff: recalculated.threeFDiff || record.threeFDiff,
+      last4F: recalculated.last4F || record.last4F,
+      updatedAt: record.updatedAt || new Date().toISOString(),
+    };
+  });
+  saveJson(HORSE_RECORDS_STORAGE_KEY, nextHorseRecords);
+
+  return {
+    ok: true,
+    raceCards: nextRaceCards,
+    legacyResults: nextLegacyResults,
+    horseRecords: nextHorseRecords,
+    before: { first3F: beforeFirst3F, ten1F: beforeTen1F },
+    after: { first3F: recalculated.first3F || "-", ten1F: recalculated.firstFurlongBase || "-" },
+  };
 }
 
 function isEntryRowLike(item) {
@@ -3981,6 +4107,19 @@ export function createKeibaApp(React, icons) {
       navigate("race");
     }
 
+    function forceRecalculateCurrentRace(race) {
+      const result = forceRecalculateFukushimaDirt1150RaceStorage(race, horseRecords);
+      if (!result.ok) {
+        notify(result.reason === "not-fukushima-dirt-1150"
+          ? "この再計算は福島ダート1150mのみ対象です"
+          : "再計算できる結果データが見つかりませんでした");
+        return;
+      }
+      setRaceCards(result.raceCards);
+      setHorseRecords(result.horseRecords);
+      notify(`再計算しました：前3F ${result.before.first3F} → ${result.after.first3F} / テン1F ${result.before.ten1F} → ${result.after.ten1F}`);
+    }
+
     function openPredictionRace(raceId) {
       setSelectedPredictionRaceId(raceId);
       navigate("predictionRace");
@@ -4061,7 +4200,7 @@ export function createKeibaApp(React, icons) {
           screen === "add" && h(AddMemo, { onSave: addMemo, onCancel: goBack }),
           screen === "import" && h(RaceImport, { onSave: addRaceCard }),
           screen === "result" && h(ResultImport, { raceCards, horseRecords, selectedRaceId, averageTimes, onSave: saveRaceResult, openHorse }),
-        screen === "race" && h(RaceDetail, { raceCards, selectedRaceId, averageTimes, horseRecords, openHorse, openResultImport, setScreen: navigate, goBack, goHome, deleteRaceEntryOnly }),
+        screen === "race" && h(RaceDetail, { raceCards, selectedRaceId, averageTimes, horseRecords, openHorse, openResultImport, setScreen: navigate, goBack, goHome, deleteRaceEntryOnly, onForceRecalculateRace: forceRecalculateCurrentRace }),
         screen === "races" && h(RegisteredRaceList, { raceCards, averageTimes, horseRecords, openRaceDetail, deleteRaceEntryOnly, setScreen: navigate, registeredListState, setRegisteredListState }),
         screen === "prediction" && h(PredictionPage, { raceCards, horseRecords, openPredictionRace }),
         screen === "predictionRace" && h(PredictionRacePage, { selectedRaceId: selectedPredictionRaceId, raceCards, horseRecords, memos, paceNotes, averageTimes, trackBiasNotes, openHorse, openRaceDetail, openPacePrediction, openImportantFactors, openTrackBias }),
@@ -4893,7 +5032,7 @@ export function createKeibaApp(React, icons) {
     );
   }
 
-  function RaceDetail({ raceCards, selectedRaceId, averageTimes, horseRecords = [], openHorse, openResultImport, setScreen, goBack, goHome, deleteRaceEntryOnly }) {
+  function RaceDetail({ raceCards, selectedRaceId, averageTimes, horseRecords = [], openHorse, openResultImport, setScreen, goBack, goHome, deleteRaceEntryOnly, onForceRecalculateRace }) {
     const [showAllResults, setShowAllResults] = useState(false);
     const [showEntries, setShowEntries] = useState(false);
     const storedRaceCards = getAllRaceCards();
@@ -4963,6 +5102,7 @@ export function createKeibaApp(React, icons) {
           h(RaceLapPanel, { result: resultMeta, raceInfo: info }),
           h(CornerPassagePanel, { result: resultMeta }),
           h("div", { className: "race-detail-actions" },
+            shouldForceFukushima1150DisplayFromLaps(resultMeta, info) && h("button", { type: "button", className: "secondary", onClick: () => onForceRecalculateRace && onForceRecalculateRace(raceWithResult) }, "このレースを再計算"),
             h("button", { type: "button", className: "secondary", onClick: () => setShowAllResults((current) => !current) }, showAllResults ? "全着順を閉じる" : "全着順を見る"),
             entries.length > 0 ? h("button", { type: "button", className: "secondary", onClick: () => setShowEntries((current) => !current) }, showEntries ? "出走表を閉じる" : "出走表を見る") : h("span", { className: "muted-mini" }, "出走表は削除済み"),
             h("button", { type: "button", className: "secondary", onClick: () => setScreen("add") }, "このレースの回顧メモを書く")
