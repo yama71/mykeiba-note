@@ -924,9 +924,9 @@ function parseRaceResultMeta(text, raceInfo = {}) {
     if (passage) cornerPassages[String(corner)] = passage;
   });
 
-  const half = calculateHalfTimes(lapTimes, raceInfo.distance);
-  const threeF = calculateThreeFTimes(lapTimes, raceInfo.distance, last3F);
-  const firstFurlong = calculateFirstFurlongBase(lapTimes, raceInfo.distance);
+  const half = calculateHalfTimes(lapTimes, raceInfo);
+  const threeF = calculateThreeFTimes(lapTimes, raceInfo, last3F);
+  const firstFurlong = calculateFirstFurlongBase(lapTimes, raceInfo);
   return {
     lapTimes,
     last4F,
@@ -945,13 +945,11 @@ function parseRaceResultMeta(text, raceInfo = {}) {
   };
 }
 
-function calculateHalfTimes(lapTimes, distance) {
-  const laps = safeArray(lapTimes).map((value) => Number(value)).filter((value) => Number.isFinite(value));
-  if (laps.length === 0) return { firstHalfTime: "", secondHalfTime: "", halfDiff: "" };
-  const numericDistance = Number(String(distance || "").replace(/[^\d.]/g, ""));
-  const hasFirst100m = isFirst100mDistance(numericDistance) && laps.length > 1;
-  const segments = laps.map((lap, index) => ({ time: lap, distance: hasFirst100m && index === 0 ? 100 : 200 }));
-  const totalDistance = numericDistance > 0 ? numericDistance : segments.reduce((sum, segment) => sum + segment.distance, 0);
+function calculateHalfTimes(lapTimes, raceInfoOrDistance) {
+  const lapData = lapDataForRace(lapTimes, raceInfoOrDistance);
+  const segments = lapData.laps.map((lap, index) => ({ time: lap, distance: lapData.distances[index] }));
+  if (segments.length === 0) return { firstHalfTime: "", secondHalfTime: "", halfDiff: "" };
+  const totalDistance = lapData.totalDistance;
   const halfDistance = totalDistance / 2;
   let covered = 0;
   let first = 0;
@@ -976,11 +974,64 @@ function calculateHalfTimes(lapTimes, distance) {
   };
 }
 
-function lapDistancesForRace(lapTimes, distance) {
+function raceInfoValue(source = {}, keys = []) {
+  if (source == null) return "";
+  if (typeof source !== "object") return "";
+  const raceInfo = source.raceInfo && typeof source.raceInfo === "object" ? source.raceInfo : {};
+  for (const key of keys) {
+    const value = source[key] ?? raceInfo[key];
+    if (value != null && value !== "") return value;
+  }
+  return "";
+}
+
+function numericDistanceFromRaceInfo(source = {}) {
+  if (typeof source === "number" || typeof source === "string") {
+    return Number(String(source || "").replace(/[^\d.]/g, ""));
+  }
+  return Number(String(raceInfoValue(source, ["distance", "raceDistance", "meters"]) || "").replace(/[^\d.]/g, ""));
+}
+
+function isFukushimaDirt1150Race(source = {}) {
+  if (typeof source === "number" || typeof source === "string") return false;
+  const racecourse = safeString(raceInfoValue(source, ["racecourse", "track", "course", "place", "venue"]), "");
+  const surface = safeString(raceInfoValue(source, ["surface", "courseType"]), "");
+  const distance = numericDistanceFromRaceInfo(source);
+  return distance === 1150 && racecourse.includes("\u798f\u5cf6") && surface.includes("\u30c0");
+}
+
+function lapDistancesForRace(lapTimes, raceInfoOrDistance) {
   const laps = safeArray(lapTimes).map((value) => Number(value)).filter((value) => Number.isFinite(value));
-  const numericDistance = Number(String(distance || "").replace(/[^\d.]/g, ""));
+  const numericDistance = numericDistanceFromRaceInfo(raceInfoOrDistance);
   const hasFirst100m = isFirst100mDistance(numericDistance) && laps.length > 1;
   return laps.map((_, index) => (hasFirst100m && index === 0 ? 100 : 200));
+}
+
+function lapDataForRace(lapTimes, raceInfoOrDistance) {
+  const laps = safeArray(lapTimes).map((value) => Number(value)).filter((value) => Number.isFinite(value));
+  const distances = lapDistancesForRace(laps, raceInfoOrDistance);
+  const numericDistance = numericDistanceFromRaceInfo(raceInfoOrDistance);
+  const coveredDistance = distances.reduce((sum, value) => sum + value, 0);
+  const totalDistance = numericDistance > 0 ? numericDistance : coveredDistance;
+  const shouldEstimateFinalGap = isFukushimaDirt1150Race(raceInfoOrDistance)
+    && totalDistance > coveredDistance
+    && totalDistance - coveredDistance <= 100
+    && laps.length > 0
+    && distances.length > 0;
+
+  if (!shouldEstimateFinalGap) {
+    return { laps, distances, totalDistance, coveredDistance };
+  }
+
+  const gap = totalDistance - coveredDistance;
+  const lastDistance = distances[distances.length - 1] || 200;
+  const lastLap = laps[laps.length - 1];
+  return {
+    laps: [...laps, lastLap * (gap / lastDistance)],
+    distances: [...distances, gap],
+    totalDistance,
+    coveredDistance: totalDistance,
+  };
 }
 
 function calculateSegmentTime(lapTimes, lapDistances, startMeter, endMeter) {
@@ -1004,12 +1055,13 @@ function calculateSegmentTime(lapTimes, lapDistances, startMeter, endMeter) {
   return total > 0 ? total : "";
 }
 
-function calculateThreeFTimes(lapTimes, distance, officialLast3F = "") {
-  const laps = safeArray(lapTimes).map((value) => Number(value)).filter((value) => Number.isFinite(value));
+function calculateThreeFTimes(lapTimes, raceInfoOrDistance, officialLast3F = "") {
+  const lapData = lapDataForRace(lapTimes, raceInfoOrDistance);
+  const laps = lapData.laps;
   if (laps.length === 0) return { first3F: "", last3F: officialLast3F || "", threeFDiff: "", isFirst100mStart: false };
-  const numericDistance = Number(String(distance || "").replace(/[^\d.]/g, ""));
-  const distances = lapDistancesForRace(laps, numericDistance);
-  const totalDistance = numericDistance > 0 ? numericDistance : distances.reduce((sum, value) => sum + value, 0);
+  const numericDistance = numericDistanceFromRaceInfo(raceInfoOrDistance);
+  const distances = lapData.distances;
+  const totalDistance = lapData.totalDistance;
   const first = calculateSegmentTime(laps, distances, 0, 600);
   const lastCalculated = totalDistance >= 600 ? calculateSegmentTime(laps, distances, totalDistance - 600, totalDistance) : "";
   const official = Number(String(officialLast3F || "").replace(/[^\d.]/g, ""));
@@ -1028,11 +1080,15 @@ function isFirst100mDistance(distance) {
   return Number.isFinite(numeric) && numeric > 0 && numeric % 200 === 100;
 }
 
-function calculateFirstFurlongBase(lapTimes, distance) {
+function calculateFirstFurlongBase(lapTimes, raceInfoOrDistance) {
   const laps = safeArray(lapTimes).map((value) => Number(value)).filter((value) => Number.isFinite(value));
   if (laps.length === 0) return "";
-  const numericDistance = Number(String(distance || "").replace(/[^\d.]/g, ""));
-  const base = isFirst100mDistance(numericDistance) && laps.length > 1 ? laps[0] + laps[1] / 2 : laps[0];
+  const numericDistance = numericDistanceFromRaceInfo(raceInfoOrDistance);
+  const base = isFukushimaDirt1150Race(raceInfoOrDistance)
+    ? laps[0] * 2
+    : isFirst100mDistance(numericDistance) && laps.length > 1
+      ? laps[0] + laps[1] / 2
+      : laps[0];
   return Number.isFinite(base) ? base.toFixed(1) : "";
 }
 
@@ -1419,7 +1475,7 @@ function sanitizeRaceCard(race = {}) {
   });
   const id = race.raceId || race.id || stableRaceId;
   const rawResult = race.result || (safeArray(race.results).length > 0 ? { rows: race.results } : null);
-  const result = rawResult ? {
+  let result = rawResult ? {
     ...rawResult,
     status: rawResult.status || "result_registered",
     rows: safeArray(rawResult.fullResults || rawResult.rows || rawResult.results || rawResult.resultRows || rawResult.entriesResults).map(sanitizeResultRow),
@@ -1448,6 +1504,7 @@ function sanitizeRaceCard(race = {}) {
     trackBiasLabel: rawResult.trackBiasLabel || rawResult.trackTrend || "",
     biasNote: rawResult.biasNote || "",
   } : null;
+  if (result) result = recalculateFukushimaDirt1150Result(result, raceInfo);
   const status = result ? "result_registered" : (race.status || (entries.length > 0 ? "entry_registered" : ""));
   return {
     ...race,
@@ -1713,6 +1770,57 @@ function normalizeRaceResultDetails(candidate = {}) {
   };
 }
 
+function recalculateFukushimaDirt1150Result(resultLike = {}, raceInfo = {}) {
+  const result = normalizeRaceResultDetails(resultLike);
+  if (!isFukushimaDirt1150Race(raceInfo) || result.lapTimes.length === 0) return result;
+
+  const threeF = calculateThreeFTimes(result.lapTimes, raceInfo, result.last3F);
+  const firstFurlongBase = calculateFirstFurlongBase(result.lapTimes, raceInfo);
+  const firstFurlongCorner = result.firstFurlongCorner || firstExistingCorner(result.cornerPassages);
+  const firstFurlongTopHorseNumbers = safeArray(result.firstFurlongTopHorseNumbers).length > 0
+    ? safeArray(result.firstFurlongTopHorseNumbers).map((value) => String(value))
+    : extractHorseNumbersInOrder(result.cornerPassages?.[firstFurlongCorner] || "").slice(0, 5);
+  const firstFurlongMap = buildFirstFurlongMap({
+    firstFurlongBase,
+    firstFurlongTopHorseNumbers,
+  });
+  const rows = safeArray(result.fullResults).map(sanitizeResultRow).map((row) => ({
+    ...row,
+    firstFurlongEstimate: isResultNonRunner(row) || isResultStopped(row)
+      ? "-"
+      : firstFurlongMap[String(row.horseNumber || "")] || row.firstFurlongEstimate || "-",
+  }));
+  const sortedRows = sortResultRows(rows).filter(isFinishedResultRow);
+
+  return {
+    ...result,
+    rows,
+    fullResults: rows,
+    top3: sortedRows.slice(0, 3),
+    first3F: threeF.first3F || result.first3F,
+    last3F: threeF.last3F || result.last3F,
+    threeFDiff: threeF.threeFDiff || result.threeFDiff,
+    isFirst100mStart: true,
+    firstFurlongBase: firstFurlongBase || result.firstFurlongBase,
+    firstFurlongCorner,
+    firstFurlongTopHorseNumbers,
+  };
+}
+
+function fukushimaLapResultChanged(before = {}, after = {}) {
+  const oldResult = normalizeRaceResultDetails(before);
+  const newResult = normalizeRaceResultDetails(after);
+  const oldRows = safeArray(oldResult.fullResults);
+  const newRows = safeArray(newResult.fullResults);
+  const oldFirstFurlongs = oldRows.map((row) => `${row.horseNumber}:${row.firstFurlongEstimate || "-"}`).join("|");
+  const newFirstFurlongs = newRows.map((row) => `${row.horseNumber}:${row.firstFurlongEstimate || "-"}`).join("|");
+  return oldResult.first3F !== newResult.first3F
+    || oldResult.last3F !== newResult.last3F
+    || oldResult.threeFDiff !== newResult.threeFDiff
+    || oldResult.firstFurlongBase !== newResult.firstFurlongBase
+    || oldFirstFurlongs !== newFirstFurlongs;
+}
+
 function resultRowsFromStoredResult(candidate = {}) {
   return normalizeRaceResultDetails(candidate).fullResults;
 }
@@ -1774,8 +1882,8 @@ function resultRowsFromHorseRecordsForRace(race = {}, horseRecords = []) {
 function findResultForRace(race = {}, horseRecords = []) {
   const safeRace = sanitizeRaceCard(race);
   const storedResult = findStoredResultForRace(safeRace);
-  if (storedResult) return normalizeRaceResultDetails(storedResult);
-  if (safeRace.result) return normalizeRaceResultDetails(safeRace.result);
+  if (storedResult) return recalculateFukushimaDirt1150Result(storedResult, safeRace);
+  if (safeRace.result) return recalculateFukushimaDirt1150Result(safeRace.result, safeRace);
   const records = horseRecords.length > 0 ? horseRecords : loadJson(HORSE_RECORDS_STORAGE_KEY);
   const recordRows = resultRowsFromHorseRecordsForRace(safeRace, records);
   return recordRows.length > 0 ? normalizeRaceResultDetails({ status: "result_registered", rows: recordRows, fullResults: recordRows }) : null;
@@ -1797,6 +1905,44 @@ function raceDisplayEntryCount(race = {}, resultRows = []) {
   if (safeArray(resultRows).length > 0) return safeArray(resultRows).length;
   const fallback = Number(race?.resultCount || race?.horseCount || race?.entriesCount || 0);
   return Number.isFinite(fallback) ? fallback : 0;
+}
+
+function recalculateFukushimaDirt1150Collections(raceCards = [], legacyResults = [], horseRecords = []) {
+  let changed = false;
+  const safeRaceCards = sanitizeRaceCards(raceCards).map((race) => {
+    if (!isFukushimaDirt1150Race(race) || !race.result) return race;
+    const result = recalculateFukushimaDirt1150Result(race.result, race);
+    if (fukushimaLapResultChanged(race.result, result)) changed = true;
+    return { ...race, result, status: "result_registered", updatedAt: race.updatedAt || new Date().toISOString() };
+  });
+
+  const resultRaces = [...safeRaceCards, ...safeArray(horseRecords)];
+  const nextLegacyResults = safeArray(legacyResults).map((item) => {
+    const race = resultRaces.find((candidate) => isSameRaceForResult(candidate, item)) || item;
+    if (!isFukushimaDirt1150Race(race)) return item;
+    const rawResult = item?.result || item;
+    const result = recalculateFukushimaDirt1150Result(rawResult, race);
+    const next = item?.result ? { ...item, result, status: "result_registered" } : { ...item, ...result, status: "result_registered" };
+    if (fukushimaLapResultChanged(rawResult, result)) changed = true;
+    return next;
+  });
+
+  const nextHorseRecords = safeArray(horseRecords).map((record) => {
+    if (!isFukushimaDirt1150Race(record)) return record;
+    const race = safeRaceCards.find((candidate) => isSameRaceForResult(candidate, record)) || record;
+    const result = findStoredResultForRace(race) || safeRaceCards.find((candidate) => isSameRaceForResult(candidate, race))?.result;
+    const recalculated = result ? recalculateFukushimaDirt1150Result(result?.result || result, race) : null;
+    const matchedRow = safeArray(recalculated?.fullResults).find((row) => {
+      const sameNumber = safeString(row.horseNumber) && safeString(row.horseNumber) === safeString(record.horseNumber);
+      const sameName = normalizeHorseName(row.horseName) && normalizeHorseName(row.horseName) === normalizeHorseName(record.horseName);
+      return sameNumber || sameName;
+    });
+    if (!matchedRow || matchedRow.firstFurlongEstimate === record.firstFurlongEstimate) return record;
+    changed = true;
+    return { ...record, firstFurlongEstimate: matchedRow.firstFurlongEstimate || "-" };
+  });
+
+  return { raceCards: safeRaceCards, legacyResults: nextLegacyResults, horseRecords: nextHorseRecords, changed };
 }
 
 function isEntryRowLike(item) {
@@ -2405,8 +2551,9 @@ function resultRowsFromRace(race, horseRecords = []) {
 
   const raceId = safeRace.raceId || safeRace.id;
   const storedResult = findStoredResultForRace(safeRace) || loadJson("raceResults").find((item) => item?.raceId === raceId || item?.id === raceId);
-  const storedRows = safeArray(storedResult?.result?.fullResults || storedResult?.result?.rows || storedResult?.fullResults || storedResult?.rows || storedResult?.results);
-  if (storedRows.length > 0) return enrichRowsWithFirstFurlong(storedRows, storedResult?.result || storedResult);
+  const storedMeta = storedResult ? recalculateFukushimaDirt1150Result(storedResult?.result || storedResult, safeRace) : null;
+  const storedRows = safeArray(storedMeta?.fullResults || storedMeta?.rows);
+  if (storedRows.length > 0) return enrichRowsWithFirstFurlong(storedRows, storedMeta);
 
   return resultRowsFromHorseRecordsForRace(safeRace, horseRecords);
 }
@@ -3331,8 +3478,14 @@ export function createKeibaApp(React, icons) {
     useEffect(() => {
       const allRaceCards = getAllRaceCards();
       const mainRaceCards = normalizeStoredRaceCards(loadJson(RACE_STORAGE_KEY));
-      if (allRaceCards.length > mainRaceCards.length) persistRaceCardsToStorage(allRaceCards);
-      if (allRaceCards.length > 0) setRaceCards(allRaceCards);
+      const recalculated = recalculateFukushimaDirt1150Collections(allRaceCards, loadJson("raceResults"), horseRecords);
+      const nextRaceCards = recalculated.raceCards.length > 0 ? recalculated.raceCards : allRaceCards;
+      if (allRaceCards.length > mainRaceCards.length || recalculated.changed) persistRaceCardsToStorage(nextRaceCards);
+      if (recalculated.changed) {
+        saveJson("raceResults", recalculated.legacyResults);
+        setHorseRecords(recalculated.horseRecords);
+      }
+      if (nextRaceCards.length > 0) setRaceCards(nextRaceCards);
     }, []);
     useEffect(() => saveJson(HORSE_RECORDS_STORAGE_KEY, horseRecords), [horseRecords]);
     useEffect(() => saveJson(AVERAGE_TIMES_STORAGE_KEY, averageTimes), [averageTimes]);
@@ -4689,7 +4842,7 @@ export function createKeibaApp(React, icons) {
         threeFDiff: safeResult.threeFDiff || "",
         isFirst100mStart: Boolean(safeResult.isFirst100mStart),
       }
-      : calculateThreeFTimes(laps, raceInfo.distance, safeResult?.last3F || "");
+      : calculateThreeFTimes(laps, raceInfo, safeResult?.last3F || "");
     const hasLapInfo = laps.length > 0 || safeResult?.last4F || safeResult?.last3F || threeF.first3F || threeF.last3F;
     return h("section", { className: "race-detail-panel race-lap-panel" },
       h("h3", null, "\u30ec\u30fc\u30b9\u30e9\u30c3\u30d7"),
