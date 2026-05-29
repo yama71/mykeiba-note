@@ -180,7 +180,12 @@ function loadJson(key) {
 }
 
 function saveJson(key, value) {
-  localStorage.setItem(key, JSON.stringify(value));
+  try {
+    localStorage.setItem(key, JSON.stringify(value));
+  } catch (error) {
+    console.error(`saveJson failed: ${key}`, error);
+    throw error;
+  }
 }
 
 function appendBrokenStorage(key, value) {
@@ -1701,8 +1706,7 @@ function mergeRaceCardsById(raceCards) {
     const key = raceMatchIdentity(safeRace) || safeRace.raceId || safeRace.id;
     if (!key) return;
     const current = map.get(key) || {};
-    const linkedResult = findResultForRace(safeRace);
-    const result = linkedResult || safeRace.result || current.result || null;
+    const result = safeRace.result || current.result || null;
     map.set(key, {
       ...current,
       ...safeRace,
@@ -2495,9 +2499,19 @@ function loadRaceCardsFromStorage() {
 
 function persistRaceCardsToStorage(raceCards) {
   const storageCards = safeArray(raceCards).map(toStorageRaceCard);
-  saveJson(RACE_STORAGE_KEY, storageCards);
-  saveJson(WEEKLY_RACES_COMPAT_KEY, storageCards);
-  saveJson(RACE_ENTRIES_COMPAT_KEY, storageCards);
+  const previousMain = localStorage.getItem(RACE_STORAGE_KEY);
+  const previousWeekly = localStorage.getItem(WEEKLY_RACES_COMPAT_KEY);
+  try {
+    saveJson(RACE_STORAGE_KEY, storageCards);
+    saveJson(WEEKLY_RACES_COMPAT_KEY, storageCards);
+  } catch (error) {
+    console.error("persistRaceCardsToStorage failed; rolling back race card writes", error);
+    if (previousMain == null) localStorage.removeItem(RACE_STORAGE_KEY);
+    else localStorage.setItem(RACE_STORAGE_KEY, previousMain);
+    if (previousWeekly == null) localStorage.removeItem(WEEKLY_RACES_COMPAT_KEY);
+    else localStorage.setItem(WEEKLY_RACES_COMPAT_KEY, previousWeekly);
+    throw error;
+  }
   return storageCards;
 }
 
@@ -2727,6 +2741,8 @@ function repairStorageData() {
 
 function getDataDiagnostics() {
   const races = sanitizeRaceCards(loadJson(RACE_STORAGE_KEY));
+  const horseRecords = loadJson(HORSE_RECORDS_STORAGE_KEY);
+  const horseNames = new Set(safeArray(horseRecords).map((record) => normalizeHorseName(record.horseName)).filter(Boolean));
   const unreadable = races.filter((race) => !isReadableRaceCard(race)).length;
   const raceResults = races.filter((race) => race.result || race.status === "result_registered").length;
   const entryRegistered = races.filter((race) => race.status === "entry_registered").length;
@@ -2735,7 +2751,9 @@ function getDataDiagnostics() {
   const brokenRaceEntries = loadJson(BROKEN_RACE_ENTRIES_KEY).length + loadJson("brokenRaceEntries").length;
   const brokenRaceResults = loadJson(BROKEN_RACE_RESULTS_KEY).length + loadJson("brokenRaceResults").length;
   return {
-    horseRecords: loadJson(HORSE_RECORDS_STORAGE_KEY).length,
+    horseRecords: horseRecords.length,
+    horses: horseNames.size,
+    duplicateHorseRecords: countDuplicateHorseRecords(horseRecords),
     horseNotes: loadJson(MEMO_STORAGE_KEY).length,
     raceResults,
     entryRegistered,
@@ -2833,6 +2851,60 @@ function upsertHorseRecords(currentRecords, race, result) {
 
 function buildHorseRecordsFromRaceCards(raceCards) {
   return sanitizeRaceCards(raceCards).reduce((records, race) => race.result ? upsertHorseRecords(records, race, race.result) : records, []);
+}
+
+function dedupeHorseRecords(records = []) {
+  const map = new Map();
+  safeArray(records).forEach((record) => {
+    if (!record || typeof record !== "object") return;
+    const key = recordKey(record);
+    const current = map.get(key);
+    if (!current) {
+      map.set(key, record);
+      return;
+    }
+    const currentTime = new Date(current.updatedAt || current.savedAt || current.createdAt || 0).getTime();
+    const nextTime = new Date(record.updatedAt || record.savedAt || record.createdAt || 0).getTime();
+    map.set(key, nextTime >= currentTime ? { ...current, ...record } : { ...record, ...current });
+  });
+  return [...map.values()].sort((a, b) => new Date(b.raceDate || b.date || 0) - new Date(a.raceDate || a.date || 0));
+}
+
+function countDuplicateHorseRecords(records = []) {
+  const counts = new Map();
+  safeArray(records).forEach((record) => {
+    const key = recordKey(record);
+    counts.set(key, (counts.get(key) || 0) + 1);
+  });
+  return [...counts.values()].reduce((sum, count) => sum + Math.max(0, count - 1), 0);
+}
+
+function rebuildHorseRecordsFromStoredResults(existingRecords = []) {
+  let nextRecords = safeArray(existingRecords);
+  getAllRaceCards().forEach((race) => {
+    const resultSource = findStoredResultForRace(race) || race.result;
+    if (!resultSource) return;
+    nextRecords = upsertHorseRecords(nextRecords, race, resultSource?.result || resultSource);
+  });
+  readStorageArrayFlexible("raceResults").forEach((item) => {
+    const result = item?.result || item;
+    const race = sanitizeRaceCard({
+      id: item.raceId || item.id,
+      raceId: item.raceId || item.id,
+      date: item.date,
+      racecourse: item.racecourse,
+      raceNumber: item.raceNumber,
+      raceName: item.raceName,
+      raceClass: item.raceClass,
+      surface: item.surface,
+      distance: item.distance,
+      going: item.going,
+      result,
+      status: "result_registered",
+    });
+    nextRecords = upsertHorseRecords(nextRecords, race, result);
+  });
+  return dedupeHorseRecords(nextRecords);
 }
 
 function resultRowsFromRace(race, horseRecords = []) {
@@ -3749,7 +3821,7 @@ export function createKeibaApp(React, icons) {
     const [skipNextRaceSave, setSkipNextRaceSave] = useState(false);
     const [horseRecords, setHorseRecords] = useState(() => {
       const savedRecords = loadJson(HORSE_RECORDS_STORAGE_KEY);
-      return savedRecords.length > 0 ? savedRecords : buildHorseRecordsFromRaceCards(sanitizeRaceCards(loadJson(RACE_STORAGE_KEY)));
+      return savedRecords;
     });
     const [averageTimes, setAverageTimes] = useState(() => mergeAverageTimes(loadJson(AVERAGE_TIMES_STORAGE_KEY), defaultAverageTimes));
     const [selectedHorse, setSelectedHorse] = useState("");
@@ -3761,6 +3833,7 @@ export function createKeibaApp(React, icons) {
     const [navigationHistory, setNavigationHistory] = useState([]);
     const [registeredListState, setRegisteredListState] = useState({ dateKey: "", racecourseKey: "" });
     const [toast, setToast] = useState("");
+    const [storageError, setStorageError] = useState("");
 
     useEffect(() => saveJson(MEMO_STORAGE_KEY, memos), [memos]);
     useEffect(() => {
@@ -3770,19 +3843,8 @@ export function createKeibaApp(React, icons) {
       }
     }, [skipNextRaceSave]);
     useEffect(() => {
-      const migrated = migrateFukushimaDirt1150LapStorage();
-      const allRaceCards = migrated.raceCards || getAllRaceCards();
       const mainRaceCards = normalizeStoredRaceCards(loadJson(RACE_STORAGE_KEY));
-      const recalculated = migrated.changed
-        ? migrated
-        : recalculateFukushimaDirt1150Collections(allRaceCards, loadJson("raceResults"), horseRecords);
-      const nextRaceCards = recalculated.raceCards.length > 0 ? recalculated.raceCards : allRaceCards;
-      if (allRaceCards.length > mainRaceCards.length || recalculated.changed) persistRaceCardsToStorage(nextRaceCards);
-      if (recalculated.changed) {
-        saveJson("raceResults", recalculated.legacyResults);
-        setHorseRecords(recalculated.horseRecords);
-      }
-      if (nextRaceCards.length > 0) setRaceCards(nextRaceCards);
+      if (mainRaceCards.length > 0) setRaceCards(mainRaceCards);
     }, []);
     useEffect(() => saveJson(HORSE_RECORDS_STORAGE_KEY, horseRecords), [horseRecords]);
     useEffect(() => saveJson(AVERAGE_TIMES_STORAGE_KEY, averageTimes), [averageTimes]);
@@ -3824,6 +3886,13 @@ export function createKeibaApp(React, icons) {
     function notify(message) {
       setToast(message);
       setTimeout(() => setToast(""), 1800);
+    }
+
+    function reportSaveError(label, error) {
+      const message = `${label}: ${error?.message || String(error)}`;
+      console.error(label, error);
+      setStorageError(message);
+      notify(message);
     }
 
     function navigate(nextScreen) {
@@ -3950,9 +4019,9 @@ export function createKeibaApp(React, icons) {
           debug: { beforeCount, afterCount: verification.count, raceId: storageRace.raceId, entryCount, verification },
         };
       } catch (error) {
-        console.error("Race card save failed", error);
+        reportSaveError("Race card save failed", error);
         saveRaceSaveDebug({ status: "NG", raceId: "", message: "保存に失敗しました", error: String(error) });
-        return { ok: false, message: "保存に失敗しました", debug: { error: String(error) } };
+        return { ok: false, message: `保存に失敗しました: ${error?.message || String(error)}`, debug: { error: String(error) } };
       }
     }
 
@@ -4082,19 +4151,23 @@ export function createKeibaApp(React, icons) {
     }
 
     function saveRaceResult(raceId, result, raceInfoPatch = {}) {
-      const allRaceCards = loadRaceCardsFromStorage();
-      const targetRace = sanitizeRaceCards([...raceCards, ...allRaceCards]).find((race) => race.id === raceId || race.raceId === raceId);
-      const raceForRecord = targetRace ? { ...targetRace, raceInfo: { ...targetRace.raceInfo, ...raceInfoPatch } } : null;
-      if (targetRace) {
-        setHorseRecords((current) => upsertHorseRecords(current, raceForRecord, result));
+      try {
+        const allRaceCards = loadRaceCardsFromStorage();
+        const targetRace = sanitizeRaceCards([...raceCards, ...allRaceCards]).find((race) => race.id === raceId || race.raceId === raceId);
+        const raceForRecord = targetRace ? { ...targetRace, raceInfo: { ...targetRace.raceInfo, ...raceInfoPatch } } : null;
+        const nextHorseRecords = targetRace ? upsertHorseRecords(horseRecords, raceForRecord, result) : horseRecords;
+        const updatedRace = sanitizeRaceCard({ ...(targetRace || {}), id: raceId, raceId, raceInfo: { ...(targetRace?.raceInfo || {}), ...raceInfoPatch }, result, status: "result_registered" });
+        const nextCards = [updatedRace, ...sanitizeRaceCards(allRaceCards).filter((race) => race.id !== updatedRace.id && race.raceId !== updatedRace.raceId)];
+        persistRaceCardsToStorage(nextCards);
+        upsertLegacyRaceResult(updatedRace, result);
+        saveJson(HORSE_RECORDS_STORAGE_KEY, nextHorseRecords);
+        setHorseRecords(nextHorseRecords);
+        setRaceCards(nextCards);
+        notify("レース結果を保存しました");
+        navigate("race");
+      } catch (error) {
+        reportSaveError("Race result save failed", error);
       }
-      const updatedRace = sanitizeRaceCard({ ...(targetRace || {}), id: raceId, raceId, raceInfo: { ...(targetRace?.raceInfo || {}), ...raceInfoPatch }, result, status: "result_registered" });
-      const nextCards = [updatedRace, ...sanitizeRaceCards(allRaceCards).filter((race) => race.id !== updatedRace.id && race.raceId !== updatedRace.raceId)];
-      persistRaceCardsToStorage(nextCards);
-      upsertLegacyRaceResult(updatedRace, result);
-      setRaceCards(nextCards);
-      notify("レース結果を保存しました");
-      navigate("race");
     }
 
     function openResultImport(raceId) {
@@ -4118,6 +4191,29 @@ export function createKeibaApp(React, icons) {
       setRaceCards(result.raceCards);
       setHorseRecords(result.horseRecords);
       notify(`再計算しました：前3F ${result.before.first3F} → ${result.after.first3F} / テン1F ${result.before.ten1F} → ${result.after.ten1F}`);
+    }
+
+    function repairHorseRecordsManual() {
+      try {
+        const repaired = rebuildHorseRecordsFromStoredResults(horseRecords);
+        saveJson(HORSE_RECORDS_STORAGE_KEY, repaired);
+        setHorseRecords(repaired);
+        notify(`馬別成績を修復しました：${repaired.length}件`);
+      } catch (error) {
+        reportSaveError("Horse records repair failed", error);
+      }
+    }
+
+    function removeDuplicateHorseRecordsManual() {
+      try {
+        const before = safeArray(horseRecords).length;
+        const deduped = dedupeHorseRecords(horseRecords);
+        saveJson(HORSE_RECORDS_STORAGE_KEY, deduped);
+        setHorseRecords(deduped);
+        notify(`重複戦績を削除しました：${before - deduped.length}件`);
+      } catch (error) {
+        reportSaveError("Horse records dedupe failed", error);
+      }
     }
 
     function openPredictionRace(raceId) {
@@ -4196,6 +4292,11 @@ export function createKeibaApp(React, icons) {
       h("div", { className: "app-shell" },
         h(Header, { screen, goBack, goHome }),
         h("main", null,
+          storageError && h("div", { className: "error-panel save-error-panel" },
+            h("strong", null, "保存処理でエラーが発生しました"),
+            h("p", null, storageError),
+            h("button", { type: "button", className: "secondary", onClick: () => setStorageError("") }, "閉じる")
+          ),
           screen === "home" && h(Home, { raceCards, horseRecords, setScreen: navigate, openRaceDetail, safeHomeMode }),
           screen === "add" && h(AddMemo, { onSave: addMemo, onCancel: goBack }),
           screen === "import" && h(RaceImport, { onSave: addRaceCard }),
@@ -4209,7 +4310,7 @@ export function createKeibaApp(React, icons) {
         screen === "trackBias" && h(TrackBiasDetailPage, { selectedRaceId: selectedPredictionRaceId, raceCards, horseRecords, averageTimes, trackBiasNotes, onSaveTrackBiasNote: saveTrackBiasNote }),
         screen === "deleteResults" && h(RaceResultDeleteScreen, { raceCards, horseRecords, onDeleteResult: deleteRaceResultByRaceId }),
         screen === "average" && h(AverageTimesScreen, { averageTimes }),
-        screen === "diagnostic" && h(DataDiagnosticScreen, { setScreen: navigate }),
+        screen === "diagnostic" && h(DataDiagnosticScreen, { setScreen: navigate, onRepairHorseRecords: repairHorseRecordsManual, onDedupeHorseRecords: removeDuplicateHorseRecordsManual }),
         screen === "backup" && h(BackupScreen, { memos, raceCards, horseRecords, averageTimes, setMemos, setRaceCards, setHorseRecords, setAverageTimes, notify, setScreen: navigate, deleteEntryOnlyHorseRecords }),
           screen === "list" && h(HorseList, { horseStats, horseRecords, openHorse, setScreen: navigate }),
           screen === "search" && h(HorseSearch, { horseStats, openHorse }),
@@ -4710,11 +4811,13 @@ export function createKeibaApp(React, icons) {
     );
   }
 
-  function DataDiagnosticScreen({ setScreen }) {
+  function DataDiagnosticScreen({ setScreen, onRepairHorseRecords, onDedupeHorseRecords }) {
     const diagnostics = getDataDiagnostics();
     const registeredListError = loadRegisteredListError();
     const rows = [
       ["horseRecords", diagnostics.horseRecords],
+      ["馬数", diagnostics.horses],
+      ["重複戦績数", diagnostics.duplicateHorseRecords],
       ["horseNotes", diagnostics.horseNotes],
       ["raceResults", diagnostics.raceResults],
       ["raceEntries", diagnostics.raceEntries],
@@ -4737,6 +4840,12 @@ export function createKeibaApp(React, icons) {
         h("span", null, label),
         h("strong", null, value)
       ))),
+      h("div", { className: "backup-panel" },
+        h("h3", null, "手動メンテナンス"),
+        h("p", null, "重い全件処理は自動実行しません。必要な時だけ実行してください。"),
+        h("button", { type: "button", className: "secondary full-button", onClick: onRepairHorseRecords }, "馬別成績を修復"),
+        h("button", { type: "button", className: "secondary full-button", onClick: onDedupeHorseRecords }, "重複戦績を削除")
+      ),
       h("button", { type: "button", className: "secondary full-button", onClick: () => setScreen("backup") }, "設定に戻る")
     );
   }
