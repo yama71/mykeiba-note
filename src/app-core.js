@@ -581,6 +581,63 @@ function parseRaceEntries(text) {
   return legacyRows.length > 0 ? applyJraFrameAssignment(legacyRows) : [makeUnparsedRow(text.trim())];
 }
 
+function parseSpecialRegistrationEntries(text) {
+  const lines = String(text || "").split(/\r?\n/).map(normalizeRaceTextLine).filter(Boolean);
+  const rows = [];
+  lines.forEach((line) => {
+    const row = parseSpecialRegistrationLine(line);
+    if (row) rows.push(row);
+  });
+  return rows.length > 0 ? rows : [makeUnparsedRow(String(text || "").trim())];
+}
+
+function parseSpecialRegistrationLine(line) {
+  const value = String(line || "").trim();
+  if (!value) return null;
+  if (/^(馬名|出走予定|特別登録|登録馬|想定騎手|騎手|斤量|性齢|枠|馬番)/.test(value)) return null;
+  if (/^\d{1,2}\s*頭?$/.test(value)) return null;
+  const cleaned = value
+    .replace(/^[・*●○◎▲△☆★\s]+/, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!cleaned) return null;
+
+  const tokens = cleaned.split(/\s+/).filter(Boolean);
+  const contentTokens = /^\d{1,2}$/.test(tokens[0] || "") ? tokens.slice(1) : tokens;
+  if (contentTokens.length === 0) return null;
+  const sexAgeIndex = contentTokens.findIndex((token) => /^(牡|牝|せん|セン|セ|騙)\d{1,2}$/.test(token));
+  const weightIndex = contentTokens.findIndex((token) => /^\d{2}(?:\.\d)?$/.test(token));
+  const statusIndex = contentTokens.findIndex((token) => /^(除外|取消|非出走)$/.test(token));
+  const horseName = cleanHorseName(contentTokens[0] || "");
+  if (!horseName) return null;
+  const jockeyCandidates = contentTokens.slice(1).filter((token, index) => {
+    const actualIndex = index + 1;
+    return actualIndex !== sexAgeIndex
+      && actualIndex !== weightIndex
+      && actualIndex !== statusIndex
+      && !/^(未定|想定|予定)$/.test(token)
+      && !/^\d+(?:\.\d+)?$/.test(token);
+  });
+  const jockey = contentTokens.includes("未定") ? "未定" : (jockeyCandidates[jockeyCandidates.length - 1] || "未定");
+  const status = statusIndex >= 0 ? contentTokens[statusIndex] : "";
+  return {
+    id: crypto.randomUUID(),
+    frameNumber: "",
+    horseNumber: "",
+    horseName,
+    sexAge: sexAgeIndex >= 0 ? contentTokens[sexAgeIndex] : "",
+    popularity: "",
+    jockey,
+    carriedWeight: weightIndex >= 0 ? contentTokens[weightIndex] : "",
+    raw: line,
+    parsed: true,
+    importSource: "特別登録",
+    status,
+    isScratched: status === "取消",
+    isExcluded: status === "除外" || status === "非出走",
+  };
+}
+
 function parseNetkeibaRaceEntries(lines) {
   const safeLines = safeArray(lines).map((line) => String(line || "").trim()).filter(Boolean);
   const hasNetkeibaMarker = safeLines.some((line) => line.includes("のデータベース"));
@@ -1597,6 +1654,99 @@ function toStorageRaceEntry(entry = {}) {
   };
 }
 
+function normalizeEntryStatus(value) {
+  const raw = String(value || "").trim();
+  if (raw === "特別登録" || raw === "special_registered" || raw === "special") return "special_registered";
+  if (raw === "正式出走表" || raw === "official_entry" || raw === "official") return "official_entry";
+  return raw || "official_entry";
+}
+
+function entryStatusLabel(value) {
+  const status = normalizeEntryStatus(value);
+  if (status === "special_registered") return "特別登録";
+  if (status === "official_entry") return "正式出走表";
+  return status || "正式出走表";
+}
+
+function isSpecialRaceCard(race = {}) {
+  return normalizeEntryStatus(race.entryStatus || race.raceEntryStatus || race.entryType || race.registrationType) === "special_registered";
+}
+
+function isOfficialRaceCard(race = {}) {
+  return normalizeEntryStatus(race.entryStatus || race.raceEntryStatus || race.entryType || race.registrationType) !== "special_registered";
+}
+
+function raceNameDateKey(race = {}) {
+  const safeRace = sanitizeRaceCard(race);
+  return [
+    safeString(safeRace.raceInfo?.raceDate || safeRace.date || ""),
+    normalizeHorseName(safeRace.raceInfo?.raceName || safeRace.raceName || ""),
+  ].join("__");
+}
+
+function findSpecialRegistrationRace(officialRace = {}, existingRaceCards = []) {
+  const official = sanitizeRaceCard(officialRace);
+  const targetDate = safeString(official.raceInfo?.raceDate || official.date || "");
+  const targetName = normalizeHorseName(official.raceInfo?.raceName || official.raceName || "");
+  if (!targetDate || !targetName) return null;
+  return safeArray(existingRaceCards).map(sanitizeRaceCard).find((candidate) => {
+    const info = candidate.raceInfo || {};
+    return isSpecialRaceCard(candidate)
+      && safeString(info.raceDate || candidate.date || "") === targetDate
+      && normalizeHorseName(info.raceName || candidate.raceName || "") === targetName;
+  }) || null;
+}
+
+function mergeOfficialEntriesIntoSpecialRace(specialRace = {}, officialRace = {}) {
+  const special = sanitizeRaceCard(specialRace);
+  const official = sanitizeRaceCard(officialRace);
+  const officialByName = new Map(safeArray(official.entries).map((entry) => [normalizeHorseName(entry.horseName), entry]));
+  const usedNames = new Set();
+  const mergedEntries = safeArray(special.entries).map((entry) => {
+    const key = normalizeHorseName(entry.horseName);
+    const officialEntry = officialByName.get(key);
+    if (!officialEntry) {
+      return sanitizeRaceEntry({
+        ...entry,
+        status: entry.status || "非出走",
+        isExcluded: entry.isExcluded || true,
+      });
+    }
+    usedNames.add(key);
+    return sanitizeRaceEntry({
+      ...entry,
+      frameNumber: officialEntry.frameNumber || officialEntry.frame || entry.frameNumber || "",
+      horseNumber: officialEntry.horseNumber || entry.horseNumber || "",
+      jockey: officialEntry.jockey || entry.jockey || "",
+      status: officialEntry.status || "",
+      isScratched: Boolean(officialEntry.isScratched),
+      isExcluded: Boolean(officialEntry.isExcluded),
+    });
+  });
+  safeArray(official.entries).forEach((entry) => {
+    const key = normalizeHorseName(entry.horseName);
+    if (!key || usedNames.has(key)) return;
+    mergedEntries.push(sanitizeRaceEntry(entry));
+  });
+  return sanitizeRaceCard({
+    ...official,
+    ...special,
+    raceInfo: {
+      ...(special.raceInfo || {}),
+      ...(official.raceInfo || {}),
+    },
+    id: special.id || special.raceId || official.id,
+    raceId: special.raceId || special.id || official.raceId,
+    result: special.result || official.result || null,
+    status: special.result || official.result ? "result_registered" : "entry_registered",
+    entryStatus: "official_entry",
+    raceEntryStatus: "official_entry",
+    entries: mergedEntries,
+    createdAt: special.createdAt || official.createdAt,
+    updatedAt: new Date().toISOString(),
+  });
+}
+
 function sanitizeResultRow(row = {}) {
   const rawStatus = normalizeResultStatus(row.status || row.finish || "");
   const isScratched = Boolean(row.isScratched || rawStatus === "取消");
@@ -1691,6 +1841,8 @@ function sanitizeRaceCard(race = {}) {
     entries,
     result,
     status,
+    entryStatus: normalizeEntryStatus(race.entryStatus || race.raceEntryStatus || race.entryType || race.registrationType),
+    raceEntryStatus: normalizeEntryStatus(race.entryStatus || race.raceEntryStatus || race.entryType || race.registrationType),
     createdAt: race.createdAt || new Date().toISOString(),
     updatedAt: race.updatedAt || race.createdAt || new Date().toISOString(),
   };
@@ -1721,6 +1873,8 @@ function toStorageRaceCard(race = {}) {
     meetingGroupLabel: safeRace.raceInfo.meetingGroupLabel || "",
     startTime: safeRace.raceInfo.raceTime || "",
     status: safeRace.result ? "result_registered" : "entry_registered",
+    entryStatus: normalizeEntryStatus(safeRace.entryStatus),
+    raceEntryStatus: normalizeEntryStatus(safeRace.entryStatus),
     entries: safeArray(safeRace.entries).map(toStorageRaceEntry).filter((entry) => normalizeHorseName(entry.horseName)),
     results: safeRace.result ? safeArray(safeRace.result.rows).map(sanitizeResultRow) : [],
     result: safeRace.result || null,
@@ -2454,6 +2608,8 @@ function normalizeRaceCardForList(card) {
     distance: safeString(card?.distance || raceInfo.distance || ""),
     entries,
     entriesCount,
+    entryStatus: normalizeEntryStatus(card?.entryStatus || card?.raceEntryStatus || card?.entryType || card?.registrationType),
+    entryStatusLabel: entryStatusLabel(card?.entryStatus || card?.raceEntryStatus || card?.entryType || card?.registrationType),
     status,
     resultStatusLabel: rawResult ? "登録済み" : "未登録",
     winnerName: safeString(winner?.horseName || ""),
@@ -2746,6 +2902,7 @@ function validateRaceCard(raceCard) {
 
 function inspectRaceCardBeforeSave(raceCard, existingRaceCards = []) {
   const race = sanitizeRaceCard(raceCard);
+  const specialRegistration = isSpecialRaceCard(race);
   const entries = safeArray(race.entries);
   const warnings = [];
   const fatals = [];
@@ -2771,21 +2928,23 @@ function inspectRaceCardBeforeSave(raceCard, existingRaceCards = []) {
     return safe.raceId === raceId
       || (info.raceDate && target.raceDate && info.raceDate === target.raceDate
         && info.track === target.track
-        && raceNumberLabel(info.raceNumber) === raceNumberLabel(target.raceNumber));
+        && raceNumberLabel(info.raceNumber) === raceNumberLabel(target.raceNumber))
+      || (info.raceDate && target.raceDate && info.raceDate === target.raceDate
+        && normalizeHorseName(info.raceName) && normalizeHorseName(info.raceName) === normalizeHorseName(target.raceName));
   });
 
   if (entries.length === 0) fatals.push("entries が0件です");
   if (!raceId) fatals.push("raceId が作れません");
   if (missingNames.length >= Math.max(1, Math.ceil(entries.length * 0.8))) fatals.push("馬名がほぼ取得できていません");
-  if (missingNumbers.length >= Math.max(1, Math.ceil(entries.length * 0.8))) fatals.push("馬番がほぼ取得できていません");
-  if (duplicatedNumbers.length) warnings.push(`馬番が重複しています：${duplicatedNumbers.join(", ")}`);
+  if (!specialRegistration && missingNumbers.length >= Math.max(1, Math.ceil(entries.length * 0.8))) fatals.push("馬番がほぼ取得できていません");
+  if (!specialRegistration && duplicatedNumbers.length) warnings.push(`馬番が重複しています：${duplicatedNumbers.join(", ")}`);
   if (missingNames.length) warnings.push(`馬名が空の行があります：${missingNames.join(", ")}行目`);
-  if (absentExpectedNumbers.length) warnings.push(`登録予定頭数が${entries.length}頭ですが、馬番 ${absentExpectedNumbers.join(", ")} が見つかりません`);
+  if (!specialRegistration && absentExpectedNumbers.length) warnings.push(`登録予定頭数が${entries.length}頭ですが、馬番 ${absentExpectedNumbers.join(", ")} が見つかりません`);
   if (missingSexAges.length) warnings.push(`性齢が空の馬があります：${missingSexAges.length}頭`);
-  if (missingJockeys.length) warnings.push(`騎手が空の馬があります：${missingJockeys.length}頭`);
-  if (missingWeights.length) warnings.push(`斤量が空の馬があります：${missingWeights.length}頭`);
-  if (missingPopularities.length) warnings.push(`人気が空の馬があります：${missingPopularities.length}頭`);
-  if (missingFrames.length) warnings.push(`枠番が空の馬があります：${missingFrames.length}頭`);
+  if (!specialRegistration && missingJockeys.length) warnings.push(`騎手が空の馬があります：${missingJockeys.length}頭`);
+  if (!specialRegistration && missingWeights.length) warnings.push(`斤量が空の馬があります：${missingWeights.length}頭`);
+  if (!specialRegistration && missingPopularities.length) warnings.push(`人気が空の馬があります：${missingPopularities.length}頭`);
+  if (!specialRegistration && missingFrames.length) warnings.push(`枠番が空の馬があります：${missingFrames.length}頭`);
   if (sameRace) warnings.push("同じ日付・競馬場・レース番号の出走表がすでに登録されています");
   if (findResultForRace(race)) warnings.push("このレースは既に結果登録済みです。出走表を上書きしても結果データは残り、一覧でも結果登録済みとして表示します。");
   return { race, raceId, sameRace, warnings, fatals };
@@ -4123,7 +4282,12 @@ export function createKeibaApp(React, icons) {
       try {
         const now = new Date().toISOString();
         const beforeCount = loadJson(RACE_STORAGE_KEY).length;
-        const nextRaceCard = sanitizeRaceCard(toStorageRaceCard({ ...raceCard, createdAt: now, updatedAt: now }));
+        const initialRaceCard = sanitizeRaceCard(toStorageRaceCard({ ...raceCard, createdAt: now, updatedAt: now }));
+        const existingCards = getAllRaceCards();
+        const linkedSpecialRace = isOfficialRaceCard(initialRaceCard) ? findSpecialRegistrationRace(initialRaceCard, existingCards) : null;
+        const nextRaceCard = linkedSpecialRace
+          ? mergeOfficialEntriesIntoSpecialRace(linkedSpecialRace, initialRaceCard)
+          : initialRaceCard;
         const entryCount = safeArray(nextRaceCard.entries).length;
         const existingResult = findResultForRace(nextRaceCard, horseRecords);
         const linkedRaceCard = existingResult
@@ -4548,6 +4712,7 @@ export function createKeibaApp(React, icons) {
     const [saveDebug, setSaveDebug] = useState({ beforeCount: loadJson(RACE_STORAGE_KEY).length, afterCount: loadJson(RACE_STORAGE_KEY).length, raceId: "", status: "未保存" });
     const [showPreview, setShowPreview] = useState(false);
     const [importFormat, setImportFormat] = useState("");
+    const [entryStatus, setEntryStatus] = useState("official_entry");
     const safeEntries = safeArray(entries).map(sanitizeRaceEntry);
     const validEntryCount = safeEntries.filter((entry) => normalizeHorseName(entry.horseName)).length;
     const unparsedEntryCount = Math.max(0, safeEntries.length - validEntryCount);
@@ -4565,9 +4730,13 @@ export function createKeibaApp(React, icons) {
     }
 
     function analyze() {
-      const parsedEntries = parseRaceEntries(pasteText);
+      const parsedEntries = entryStatus === "special_registered"
+        ? parseSpecialRegistrationEntries(pasteText)
+        : parseRaceEntries(pasteText);
       setEntries(parsedEntries);
-      setImportFormat(parsedEntries.some((entry) => entry.importSource === "netkeiba形式") ? "netkeiba形式" : (parsedEntries.some((entry) => entry.parsed) ? "JRA公式形式" : "未判定"));
+      setImportFormat(entryStatus === "special_registered"
+        ? "特別登録"
+        : (parsedEntries.some((entry) => entry.importSource === "netkeiba形式") ? "netkeiba形式" : (parsedEntries.some((entry) => entry.parsed) ? "JRA公式形式" : "未判定")));
       const validCount = parsedEntries.filter((entry) => normalizeHorseName(entry.horseName)).length;
       const skippedCount = Math.max(0, parsedEntries.length - validCount);
       setWarning(parsedEntries.length === 0
@@ -4586,6 +4755,8 @@ export function createKeibaApp(React, icons) {
           surface: raceInfo.surface || "",
           going: raceInfo.going || "",
         },
+        entryStatus,
+        raceEntryStatus: entryStatus,
         entries: safeEntries.map(({ id, frameNumber, horseNumber, horseName, sexAge, popularity, jockey, carriedWeight, raw, parsed, status, isScratched }) => ({
           id,
           frameNumber: String(frameNumber || "").trim(),
@@ -4608,7 +4779,8 @@ export function createKeibaApp(React, icons) {
         setSaveDebug((current) => ({ ...current, status: "失敗" }));
         return;
       }
-      const inspection = inspectRaceCardBeforeSave(validation.race, getAllRaceCards());
+      const existingRaceCards = getAllRaceCards();
+      const inspection = inspectRaceCardBeforeSave(validation.race, existingRaceCards);
       if (inspection.fatals.length > 0) {
         setWarning(`登録できません：${inspection.fatals.join(" / ")}`);
         setSaveMessage("");
@@ -4616,7 +4788,16 @@ export function createKeibaApp(React, icons) {
         return;
       }
       let raceToSave = validation.race;
-      if (inspection.sameRace) {
+      const specialTarget = entryStatus === "official_entry" ? findSpecialRegistrationRace(validation.race, existingRaceCards) : null;
+      if (specialTarget) {
+        const confirmed = window.confirm("同じ開催日・レース名の特別登録レースがあります。正式出走表で更新しますか？\n\n枠番・馬番・騎手・出走状態だけを更新し、予想メモ・印・能力評価・コメントは残します。");
+        if (!confirmed) {
+          setWarning("正式出走表での更新をキャンセルしました。");
+          return;
+        }
+        raceToSave = mergeOfficialEntriesIntoSpecialRace(specialTarget, validation.race);
+      }
+      if (!specialTarget && inspection.sameRace) {
         const choice = window.prompt(`同じレースの出走表がすでに登録されています。\n\n${inspection.warnings.join("\n")}\n\n入力してください：\n1 = キャンセル\n2 = 別データとして保存\n3 = 既存の出走表を上書き`, "3");
         if (choice === "1" || choice == null) {
           setWarning("登録をキャンセルしました。手修正画面に戻れます。");
@@ -4646,6 +4827,11 @@ export function createKeibaApp(React, icons) {
     }
 
     return h("form", { className: "screen form-screen", onSubmit: submit },
+      h(Field, { label: "出走表の種類" }, h("select", { value: entryStatus, onChange: (event) => setEntryStatus(event.target.value) },
+        h("option", { value: "official_entry" }, "正式出走表"),
+        h("option", { value: "special_registered" }, "特別登録")
+      )),
+      entryStatus === "special_registered" && h("p", { className: "lookup-note" }, "特別登録では枠番・馬番・騎手未定を許可します。正式出走表を後から取り込むと、同じ開催日・レース名のレースへ上書き更新できます。"),
       h("div", { className: "two-col" },
         h(Field, { label: "開催日", required: true }, h("input", { type: "date", value: raceInfo.raceDate, onChange: (event) => updateInfo("raceDate", event.target.value) })),
         h(Field, { label: "競馬場" }, h("select", { value: raceInfo.track, onChange: (event) => updateInfo("track", event.target.value) }, tracks.map((track) => h("option", { key: track }, track))))
@@ -5080,6 +5266,7 @@ export function createKeibaApp(React, icons) {
             h("span", null, [
               `${race.surface || ""}${race.distance || ""}${race.distance ? "m" : ""}`,
               race.entriesCount > 0 ? `${race.entriesCount}頭` : (race.resultStatusLabel === "登録済み" ? "出走表なし" : "0頭"),
+              race.entryStatusLabel,
               race.raceClass,
               `結果：${race.resultStatusLabel}`,
             ].filter(Boolean).join(" / ")),
@@ -5213,6 +5400,7 @@ export function createKeibaApp(React, icons) {
 
                       `${race.surface || ""}${race.distance || ""}${race.distance ? "m" : ""}`,
                       `${race.entriesCount}頭`,
+                      race.entryStatusLabel,
                       race.raceClass,
                       `結果：${race.resultStatusLabel}`,
                     ].filter(Boolean).join(" / ")),
@@ -5297,6 +5485,7 @@ export function createKeibaApp(React, icons) {
 
           `${info.surface || ""}${info.distance || "-"}m`,
           entryCount > 0 ? `${entryCount}頭` : (hasResult ? "出走表なし" : "0頭"),
+          entryStatusLabel(safeRace.entryStatus),
           info.raceClass,
           `結果：${hasResult ? "登録済み" : "未登録"}`,
         ].filter(Boolean).join("　")),
@@ -5354,6 +5543,7 @@ export function createKeibaApp(React, icons) {
       `${info.surface || ""}${info.distance || "-"}m`,
       info.courseType,
       displayEntryCount > 0 ? `${displayEntryCount}頭` : (hasResult ? "出走表なし" : "0頭"),
+      entryStatusLabel(raceWithResult.entryStatus),
       info.going,
       info.weather ? `天気:${info.weather}` : "",
       info.turfGoing ? `芝:${info.turfGoing}` : "",
@@ -6335,6 +6525,7 @@ export function createKeibaApp(React, icons) {
                 `${info.surface || ""}${info.distance || ""}${info.distance ? "m" : ""}`,
                 info.going,
                 `${safeArray(race.entries).length}頭`,
+                entryStatusLabel(race.entryStatus),
                 `結果：${resultLabel}`,
               ].filter(Boolean).join(" / "))
             ),
