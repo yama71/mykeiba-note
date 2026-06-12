@@ -1364,7 +1364,12 @@ function parseRaceResultMeta(text, raceInfo = {}) {
     const legacyPattern = new RegExp("^" + corner + "\\s*繧ｳ繝ｼ繝翫・");
     const index = rawLines.findIndex((line) => properPattern.test(line) || legacyPattern.test(line));
     if (index < 0) return;
-    const sameLine = rawLines[index].replace(properPattern, "").replace(legacyPattern, "").trim();
+    const sameLine = rawLines[index]
+      .replace(properPattern, "")
+      .replace(legacyPattern, "")
+      .replace(/[（(]\s*2\s*周目\s*[）)]/g, "")
+      .replace(/\s*2\s*周目/g, "")
+      .trim();
     const passage = sameLine || rawLines[index + 1] || "";
     if (passage) cornerPassages[String(corner)] = passage;
   });
@@ -1699,7 +1704,11 @@ function extractResultTime(line) {
 function extractCornerLine(lines, label) {
   const index = lines.findIndex((line) => line === label || line.startsWith(label));
   if (index < 0) return "";
-  const sameLine = lines[index].replace(label, "").trim();
+  const sameLine = lines[index]
+    .replace(label, "")
+    .replace(/[（(]\s*2\s*周目\s*[）)]/g, "")
+    .replace(/\s*2\s*周目/g, "")
+    .trim();
   if (sameLine) return sameLine;
   return lines[index + 1] || "";
 }
