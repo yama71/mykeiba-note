@@ -583,12 +583,68 @@ function parseRaceEntries(text) {
 
 function parseSpecialRegistrationEntries(text) {
   const lines = String(text || "").split(/\r?\n/).map(normalizeRaceTextLine).filter(Boolean);
+  const netkeibaRows = parseNetkeibaSpecialRegistrationEntries(lines);
+  if (netkeibaRows.length > 0) return netkeibaRows;
   const rows = [];
   lines.forEach((line) => {
     const row = parseSpecialRegistrationLine(line);
     if (row) rows.push(row);
   });
   return rows.length > 0 ? rows : [makeUnparsedRow(String(text || "").trim())];
+}
+
+function parseNetkeibaSpecialRegistrationEntries(lines) {
+  const safeLines = safeArray(lines).map((line) => String(line || "").trim()).filter(Boolean);
+  if (!safeLines.some((line) => line.includes("のデータベース"))) return [];
+  const rows = [];
+  for (let index = 0; index < safeLines.length; index += 1) {
+    const horseNameLine = safeLines[index];
+    const detailLine = safeLines[index + 1] || "";
+    if (!horseNameLine || !detailLine.includes("のデータベース")) continue;
+    const detail = parseNetkeibaSpecialDetailLine(detailLine);
+    if (!detail) continue;
+    const oddsLine = safeLines[index + 2] || "";
+    const popularityLine = safeLines[index + 3] || "";
+    const odds = /^\d+(?:\.\d+)?$/.test(oddsLine) ? oddsLine : "";
+    const popularity = popularityLine.match(/(\d{1,2})\s*人気/)?.[1] || "";
+    rows.push({
+      id: crypto.randomUUID(),
+      frameNumber: "",
+      horseNumber: "",
+      horseName: cleanHorseName(horseNameLine || detail.horseName || ""),
+      sexAge: detail.sexAge || "",
+      popularity,
+      odds,
+      jockey: normalizeSpecialJockey(detail.jockey),
+      carriedWeight: "",
+      raw: [horseNameLine, detailLine, oddsLine, popularityLine].filter(Boolean).join(" / "),
+      parsed: true,
+      importSource: "netkeiba特別登録",
+      status: "",
+      isScratched: false,
+      isExcluded: false,
+    });
+    index += 3;
+  }
+  return rows;
+}
+
+function parseNetkeibaSpecialDetailLine(line) {
+  const value = String(line || "").trim();
+  const sexAgePattern = "(?:牡|牝|せん|セン|セ|騙)\\d{1,2}";
+  const match = value.match(new RegExp(`^(${sexAgePattern})\\s+(.+?)のデータベース\\s*(.*?)\\s*未定\\s*$`));
+  if (!match) return null;
+  return {
+    sexAge: match[1],
+    horseName: cleanHorseName(match[2] || ""),
+    jockey: match[3] || "",
+  };
+}
+
+function normalizeSpecialJockey(value) {
+  const jockey = String(value || "").replace(/\s+/g, "").trim();
+  if (!jockey || jockey === "未定" || jockey === "〇〇" || jockey === "○○") return "未定";
+  return jockey;
 }
 
 function parseSpecialRegistrationLine(line) {
@@ -1628,6 +1684,7 @@ function sanitizeRaceEntry(entry = {}) {
     horseName: cleanHorseName(entry.horseName || entry["馬名"] || entry["鬥ｬ蜷・"] || ""),
     sexAge: String(entry.sexAge || entry["性齢"] || ""),
     popularity: String(entry.popularity || entry["人気"] || ""),
+    odds: String(entry.odds || entry.expectedOdds || ""),
     jockey: String(entry.jockey || entry["騎手"] || ""),
     carriedWeight: String(entry.carriedWeight || entry.weight || entry["斤量"] || ""),
     raw: entry.raw || "",
@@ -1646,6 +1703,7 @@ function toStorageRaceEntry(entry = {}) {
     horseName: cleanHorseName(safeEntry.horseName),
     sexAge: safeEntry.sexAge || "",
     popularity: safeEntry.popularity || "",
+    odds: safeEntry.odds || "",
     jockey: safeEntry.jockey || "",
     weight: safeEntry.carriedWeight || "",
     status: safeEntry.status || "",
@@ -4757,13 +4815,14 @@ export function createKeibaApp(React, icons) {
         },
         entryStatus,
         raceEntryStatus: entryStatus,
-        entries: safeEntries.map(({ id, frameNumber, horseNumber, horseName, sexAge, popularity, jockey, carriedWeight, raw, parsed, status, isScratched }) => ({
+        entries: safeEntries.map(({ id, frameNumber, horseNumber, horseName, sexAge, popularity, odds, jockey, carriedWeight, raw, parsed, status, isScratched }) => ({
           id,
           frameNumber: String(frameNumber || "").trim(),
           horseNumber: String(horseNumber || "").trim(),
           horseName: String(horseName || "").trim(),
           sexAge: String(sexAge || "").trim(),
           popularity: String(popularity || "").trim(),
+          odds: String(odds || "").trim(),
           jockey: String(jockey || "").trim(),
           carriedWeight: String(carriedWeight || "").trim(),
           raw: raw || "",
@@ -4907,6 +4966,7 @@ export function createKeibaApp(React, icons) {
         h(Field, { label: "馬名" }, h("input", { value: entry.horseName, onChange: (event) => updateEntry(entry.id, "horseName", event.target.value) })),
         h(Field, { label: "性齢" }, h("input", { value: entry.sexAge || "", onChange: (event) => updateEntry(entry.id, "sexAge", event.target.value), placeholder: "牡3" })),
         h(Field, { label: "人気" }, h("input", { inputMode: "numeric", value: entry.popularity || "", onChange: (event) => updateEntry(entry.id, "popularity", event.target.value) })),
+        h(Field, { label: "想定オッズ" }, h("input", { inputMode: "decimal", value: entry.odds || "", onChange: (event) => updateEntry(entry.id, "odds", event.target.value) })),
         h(Field, { label: "騎手" }, h("input", { value: entry.jockey, onChange: (event) => updateEntry(entry.id, "jockey", event.target.value) })),
         h(Field, { label: "斤量" }, h("input", { inputMode: "decimal", value: entry.carriedWeight, onChange: (event) => updateEntry(entry.id, "carriedWeight", event.target.value) }))
       )
