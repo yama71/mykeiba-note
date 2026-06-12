@@ -16,6 +16,8 @@ const PACE_NOTES_STORAGE_KEY = "keiba-pace-prediction-notes-v1";
 const FACTOR_NOTES_STORAGE_KEY = "keiba-prediction-factor-notes-v1";
 const TRACK_BIAS_NOTES_STORAGE_KEY = "keiba-track-bias-v1";
 const BACKUP_VERSION = 1;
+const INDEXED_DB_NAME = "keiba-memo-large-store-v1";
+const INDEXED_DB_STORE = "json";
 const STORAGE_ALIASES = {
   horseNotes: MEMO_STORAGE_KEY,
   horseRecords: HORSE_RECORDS_STORAGE_KEY,
@@ -34,6 +36,20 @@ const STORAGE_ALIASES = {
   brokenRaceResultsLegacy: "brokenRaceResults",
 };
 const storageWarnings = [];
+const LARGE_DATA_STORAGE_KEYS = new Set([
+  MEMO_STORAGE_KEY,
+  RACE_STORAGE_KEY,
+  HORSE_RECORDS_STORAGE_KEY,
+  AVERAGE_TIMES_STORAGE_KEY,
+  PACE_NOTES_STORAGE_KEY,
+  FACTOR_NOTES_STORAGE_KEY,
+  TRACK_BIAS_NOTES_STORAGE_KEY,
+  WEEKLY_RACES_COMPAT_KEY,
+  RACE_ENTRIES_COMPAT_KEY,
+  "raceResults",
+]);
+const indexedDbMemoryCache = new Map();
+let indexedDbOpenPromise = null;
 
 const tracks = ["東京", "中山", "阪神", "京都", "中京", "札幌", "函館", "福島", "新潟", "小倉"];
 const goingOptions = ["良", "稍重", "重", "不良"];
@@ -168,6 +184,9 @@ function safeParseStorage(key, fallback = []) {
     const raw = localStorage.getItem(key);
     if (!raw) return fallback;
     const parsed = JSON.parse(raw);
+    if (parsed && parsed.__indexedDbBacked) {
+      return indexedDbMemoryCache.has(key) ? indexedDbMemoryCache.get(key) : fallback;
+    }
     return parsed ?? fallback;
   } catch {
     return fallback;
@@ -175,11 +194,20 @@ function safeParseStorage(key, fallback = []) {
 }
 
 function loadJson(key) {
+  if (indexedDbMemoryCache.has(key)) {
+    const cached = indexedDbMemoryCache.get(key);
+    return Array.isArray(cached) ? cached : [];
+  }
   const parsed = safeParseStorage(key, []);
   return Array.isArray(parsed) ? parsed : [];
 }
 
 function saveJson(key, value) {
+  if (LARGE_DATA_STORAGE_KEYS.has(key)) {
+    indexedDbMemoryCache.set(key, value);
+    saveLargeJsonToIndexedDb(key, value);
+    return;
+  }
   try {
     const serialized = JSON.stringify(value);
     localStorage.setItem(key, serialized);
@@ -193,6 +221,95 @@ function saveJson(key, value) {
     });
     throw error;
   }
+}
+
+function openKeibaIndexedDb() {
+  if (!("indexedDB" in window)) return Promise.reject(new Error("IndexedDB is not available"));
+  if (indexedDbOpenPromise) return indexedDbOpenPromise;
+  indexedDbOpenPromise = new Promise((resolve, reject) => {
+    const request = indexedDB.open(INDEXED_DB_NAME, 1);
+    request.onupgradeneeded = () => {
+      const db = request.result;
+      if (!db.objectStoreNames.contains(INDEXED_DB_STORE)) db.createObjectStore(INDEXED_DB_STORE, { keyPath: "key" });
+    };
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error || new Error("IndexedDB open failed"));
+  });
+  return indexedDbOpenPromise;
+}
+
+async function idbGetJson(key) {
+  const db = await openKeibaIndexedDb();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(INDEXED_DB_STORE, "readonly");
+    const store = tx.objectStore(INDEXED_DB_STORE);
+    const request = store.get(key);
+    request.onsuccess = () => resolve(request.result?.value);
+    request.onerror = () => reject(request.error || new Error(`IndexedDB get failed: ${key}`));
+  });
+}
+
+async function idbSetJson(key, value) {
+  const db = await openKeibaIndexedDb();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(INDEXED_DB_STORE, "readwrite");
+    const store = tx.objectStore(INDEXED_DB_STORE);
+    const request = store.put({ key, value, updatedAt: new Date().toISOString() });
+    request.onsuccess = () => resolve(true);
+    request.onerror = () => reject(request.error || new Error(`IndexedDB set failed: ${key}`));
+  });
+}
+
+function saveLargeJsonToIndexedDb(key, value) {
+  idbSetJson(key, value)
+    .then(() => saveLocalStoragePointer(key, value))
+    .catch((error) => {
+      console.error("IndexedDB save failed", error, {
+        key,
+        itemCount: Array.isArray(value) ? value.length : undefined,
+        estimatedWriteSize: formatBytes(estimateJsonBytes(value)),
+      });
+    });
+}
+
+function saveLocalStoragePointer(key, value) {
+  const pointer = {
+    __indexedDbBacked: true,
+    key,
+    itemCount: Array.isArray(value) ? value.length : undefined,
+    estimatedSize: estimateJsonBytes(value),
+    updatedAt: new Date().toISOString(),
+  };
+  try {
+    localStorage.setItem(key, JSON.stringify(pointer));
+  } catch (error) {
+    console.warn("localStorage pointer save failed", { key, error });
+  }
+}
+
+async function migrateLargeLocalStorageToIndexedDb() {
+  const loaded = {};
+  for (const key of LARGE_DATA_STORAGE_KEYS) {
+    try {
+      let value = await idbGetJson(key);
+      if (value == null) {
+        const raw = localStorage.getItem(key);
+        if (raw) {
+          const parsed = JSON.parse(raw);
+          value = parsed?.__indexedDbBacked ? [] : parsed;
+          if (value != null) await idbSetJson(key, value);
+        }
+      }
+      if (value != null) {
+        indexedDbMemoryCache.set(key, value);
+        loaded[key] = value;
+        saveLocalStoragePointer(key, value);
+      }
+    } catch (error) {
+      console.error("IndexedDB migration/load failed", { key, error });
+    }
+  }
+  return loaded;
 }
 
 function estimateJsonBytes(value) {
@@ -240,6 +357,25 @@ function formatBytes(bytes) {
   if (value < 1024) return `${value} B`;
   if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`;
   return `${(value / 1024 / 1024).toFixed(2)} MB`;
+}
+
+function getLargeDataValue(key, fallback = []) {
+  if (indexedDbMemoryCache.has(key)) {
+    const cached = indexedDbMemoryCache.get(key);
+    return Array.isArray(cached) ? cached : fallback;
+  }
+  const value = readStorageArrayFlexible(key);
+  return value.length > 0 ? value : fallback;
+}
+
+function estimateIndexedDbCacheUsage() {
+  let bytes = 0;
+  let keys = 0;
+  indexedDbMemoryCache.forEach((value) => {
+    keys += 1;
+    bytes += estimateJsonBytes(value);
+  });
+  return { keys, bytes };
 }
 
 function countStorageItems(key) {
@@ -405,17 +541,18 @@ function returnToHomeSafely() {
 }
 
 function exportStorageBackup() {
+  const backupRaceCards = sanitizeRaceCards(getLargeDataValue(RACE_STORAGE_KEY));
   const backup = {
     appName: "MyKeiba Note",
     version: BACKUP_VERSION,
     exportedAt: new Date().toISOString(),
     data: {
-      horseNotes: loadJson(MEMO_STORAGE_KEY),
-      horseRecords: loadJson(HORSE_RECORDS_STORAGE_KEY),
-      weeklyRaces: loadJson(RACE_STORAGE_KEY),
-      raceEntries: sanitizeRaceCards(loadJson(RACE_STORAGE_KEY)).flatMap((race) => race.entries.map((entry) => ({ raceId: race.id, ...entry }))),
-      raceResults: sanitizeRaceCards(loadJson(RACE_STORAGE_KEY)).filter((race) => race.result).map((race) => ({ raceId: race.id, result: race.result })),
-      averageTimes: loadJson(AVERAGE_TIMES_STORAGE_KEY),
+      horseNotes: getLargeDataValue(MEMO_STORAGE_KEY),
+      horseRecords: getLargeDataValue(HORSE_RECORDS_STORAGE_KEY),
+      weeklyRaces: backupRaceCards,
+      raceEntries: getLargeDataValue(RACE_ENTRIES_COMPAT_KEY, backupRaceCards.flatMap((race) => race.entries.map((entry) => ({ raceId: race.id, ...entry })))),
+      raceResults: getLargeDataValue("raceResults", backupRaceCards.filter((race) => race.result).map((race) => ({ raceId: race.id, result: race.result }))),
+      averageTimes: getLargeDataValue(AVERAGE_TIMES_STORAGE_KEY),
       brokenWeeklyRaces: loadJson(BROKEN_WEEKLY_RACES_KEY),
       brokenRaceEntries: loadJson(BROKEN_RACE_ENTRIES_KEY),
       brokenRaceResults: loadJson(BROKEN_RACE_RESULTS_KEY),
@@ -434,19 +571,23 @@ function exportStorageBackup() {
 }
 
 function buildBackup(memos, raceCards, horseRecords, averageTimes) {
+  const backupMemos = getLargeDataValue(MEMO_STORAGE_KEY, memos);
+  const backupRaceCards = getLargeDataValue(RACE_STORAGE_KEY, raceCards);
+  const backupHorseRecords = getLargeDataValue(HORSE_RECORDS_STORAGE_KEY, horseRecords);
+  const backupAverageTimes = getLargeDataValue(AVERAGE_TIMES_STORAGE_KEY, averageTimes);
   return {
     appName: "MyKeiba Note",
     version: BACKUP_VERSION,
     exportedAt: new Date().toISOString(),
     data: {
-      memos,
-      horseNotes: memos,
-      raceCards: safeArray(raceCards).map(toStorageRaceCard),
+      memos: backupMemos,
+      horseNotes: backupMemos,
+      raceCards: safeArray(backupRaceCards).map(toStorageRaceCard),
       weeklyRaces: readStorageArrayFlexible(WEEKLY_RACES_COMPAT_KEY),
       raceEntries: readStorageArrayFlexible(RACE_ENTRIES_COMPAT_KEY),
       raceResults: readStorageArrayFlexible("raceResults"),
-      horseRecords,
-      averageTimes,
+      horseRecords: backupHorseRecords,
+      averageTimes: backupAverageTimes,
       predictionMemos: readStorageArrayFlexible(PACE_NOTES_STORAGE_KEY),
       importantFactorNotes: readStorageArrayFlexible(FACTOR_NOTES_STORAGE_KEY),
       trackBiasNotes: readStorageArrayFlexible(TRACK_BIAS_NOTES_STORAGE_KEY),
@@ -2110,9 +2251,14 @@ function safeString(value, fallback = "") {
 
 function readStorageArrayFlexible(key) {
   try {
+    if (indexedDbMemoryCache.has(key)) {
+      const cached = indexedDbMemoryCache.get(key);
+      return Array.isArray(cached) ? cached : [];
+    }
     const raw = localStorage.getItem(key);
     if (!raw) return [];
     const parsed = JSON.parse(raw);
+    if (parsed?.__indexedDbBacked) return [];
     if (Array.isArray(parsed)) return parsed;
     if (parsed && typeof parsed === "object") return Object.values(parsed);
     return [];
@@ -3150,6 +3296,7 @@ function getDataDiagnostics() {
   const entryRegistered = races.filter((race) => race.status === "entry_registered").length;
   const raceEntries = races.reduce((sum, race) => sum + safeArray(race.entries).length, 0);
   const storageUsage = estimateLocalStorageUsage();
+  const indexedDbUsage = estimateIndexedDbCacheUsage();
   const raceIdentityCounts = new Map();
   safeArray(allRaceCards).forEach((race) => {
     const key = raceMatchIdentity(race) || race.raceId || race.id;
@@ -3179,7 +3326,8 @@ function getDataDiagnostics() {
     localStorageKeys: storageUsage.keys,
     localStorageBytes: storageUsage.bytes,
     localStorageSize: formatBytes(storageUsage.bytes),
-    indexedDbSize: "not measured",
+    indexedDbKeys: indexedDbUsage.keys,
+    indexedDbSize: formatBytes(indexedDbUsage.bytes),
     unreadable,
     quarantined: brokenWeeklyRaces + brokenRaceEntries + brokenRaceResults,
     brokenWeeklyRaces,
@@ -4254,8 +4402,36 @@ export function createKeibaApp(React, icons) {
     const [registeredListState, setRegisteredListState] = useState({ dateKey: "", racecourseKey: "" });
     const [toast, setToast] = useState("");
     const [storageError, setStorageError] = useState("");
+    const [storageReady, setStorageReady] = useState(false);
 
-    useEffect(() => saveJson(MEMO_STORAGE_KEY, memos), [memos]);
+    useEffect(() => {
+      let cancelled = false;
+      migrateLargeLocalStorageToIndexedDb()
+        .then((loaded) => {
+          if (cancelled) return;
+          if (Array.isArray(loaded[MEMO_STORAGE_KEY])) setMemos(loaded[MEMO_STORAGE_KEY]);
+          if (Array.isArray(loaded[RACE_STORAGE_KEY])) setRaceCards(sanitizeRaceCards(loaded[RACE_STORAGE_KEY]));
+          if (Array.isArray(loaded[HORSE_RECORDS_STORAGE_KEY])) setHorseRecords(loaded[HORSE_RECORDS_STORAGE_KEY]);
+          if (Array.isArray(loaded[AVERAGE_TIMES_STORAGE_KEY])) setAverageTimes(mergeAverageTimes(loaded[AVERAGE_TIMES_STORAGE_KEY], defaultAverageTimes));
+          if (Array.isArray(loaded[PACE_NOTES_STORAGE_KEY])) setPaceNotes(loaded[PACE_NOTES_STORAGE_KEY].map(normalizePaceNote));
+          if (Array.isArray(loaded[FACTOR_NOTES_STORAGE_KEY])) setFactorNotes(loaded[FACTOR_NOTES_STORAGE_KEY].map(normalizeFactorNote));
+          if (Array.isArray(loaded[TRACK_BIAS_NOTES_STORAGE_KEY])) setTrackBiasNotes(loaded[TRACK_BIAS_NOTES_STORAGE_KEY].map(normalizeTrackBiasNote));
+        })
+        .catch((error) => {
+          console.error("IndexedDB initial load failed", error);
+          setStorageError(`IndexedDBの読み込みに失敗しました: ${error?.message || String(error)}`);
+        })
+        .finally(() => {
+          if (!cancelled) setStorageReady(true);
+        });
+      return () => {
+        cancelled = true;
+      };
+    }, []);
+
+    useEffect(() => {
+      if (storageReady) saveJson(MEMO_STORAGE_KEY, memos);
+    }, [memos, storageReady]);
     useEffect(() => {
       if (skipNextRaceSave) {
         localStorage.removeItem(FORCE_HOME_STORAGE_KEY);
@@ -4263,14 +4439,25 @@ export function createKeibaApp(React, icons) {
       }
     }, [skipNextRaceSave]);
     useEffect(() => {
+      if (!storageReady) return;
       const mainRaceCards = normalizeStoredRaceCards(loadJson(RACE_STORAGE_KEY));
       if (mainRaceCards.length > 0) setRaceCards(mainRaceCards);
-    }, []);
-    useEffect(() => saveJson(HORSE_RECORDS_STORAGE_KEY, horseRecords), [horseRecords]);
-    useEffect(() => saveJson(AVERAGE_TIMES_STORAGE_KEY, averageTimes), [averageTimes]);
-    useEffect(() => saveJson(PACE_NOTES_STORAGE_KEY, safeArray(paceNotes).map(normalizePaceNote)), [paceNotes]);
-    useEffect(() => saveJson(FACTOR_NOTES_STORAGE_KEY, safeArray(factorNotes).map(normalizeFactorNote)), [factorNotes]);
-    useEffect(() => saveJson(TRACK_BIAS_NOTES_STORAGE_KEY, safeArray(trackBiasNotes).map(normalizeTrackBiasNote)), [trackBiasNotes]);
+    }, [storageReady]);
+    useEffect(() => {
+      if (storageReady) saveJson(HORSE_RECORDS_STORAGE_KEY, horseRecords);
+    }, [horseRecords, storageReady]);
+    useEffect(() => {
+      if (storageReady) saveJson(AVERAGE_TIMES_STORAGE_KEY, averageTimes);
+    }, [averageTimes, storageReady]);
+    useEffect(() => {
+      if (storageReady) saveJson(PACE_NOTES_STORAGE_KEY, safeArray(paceNotes).map(normalizePaceNote));
+    }, [paceNotes, storageReady]);
+    useEffect(() => {
+      if (storageReady) saveJson(FACTOR_NOTES_STORAGE_KEY, safeArray(factorNotes).map(normalizeFactorNote));
+    }, [factorNotes, storageReady]);
+    useEffect(() => {
+      if (storageReady) saveJson(TRACK_BIAS_NOTES_STORAGE_KEY, safeArray(trackBiasNotes).map(normalizeTrackBiasNote));
+    }, [trackBiasNotes, storageReady]);
 
     const horseStats = useMemo(() => {
       const map = new Map();
@@ -5310,6 +5497,7 @@ export function createKeibaApp(React, icons) {
       ["importantFactorNotes", diagnostics.importantFactorNotes],
       ["localStorageKeys", diagnostics.localStorageKeys],
       ["localStorageSize", diagnostics.localStorageSize],
+      ["IndexedDB keys", diagnostics.indexedDbKeys],
       ["IndexedDB", diagnostics.indexedDbSize],
       ["読み込み不可データ", diagnostics.unreadable],
       ["隔離データ", diagnostics.quarantined],
