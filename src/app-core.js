@@ -595,12 +595,12 @@ function parseSpecialRegistrationEntries(text) {
 
 function parseNetkeibaSpecialRegistrationEntries(lines) {
   const safeLines = safeArray(lines).map((line) => String(line || "").trim()).filter(Boolean);
-  if (!safeLines.some((line) => line.includes("のデータベース"))) return [];
+  if (!safeLines.some(isNetkeibaSpecialDetailLine)) return [];
   const rows = [];
   for (let index = 0; index < safeLines.length; index += 1) {
     const horseNameLine = safeLines[index];
     const detailLine = safeLines[index + 1] || "";
-    if (!horseNameLine || !detailLine.includes("のデータベース")) continue;
+    if (!horseNameLine || !isNetkeibaSpecialDetailLine(detailLine)) continue;
     const detail = parseNetkeibaSpecialDetailLine(detailLine);
     if (!detail) continue;
     const oddsLine = safeLines[index + 2] || "";
@@ -616,7 +616,7 @@ function parseNetkeibaSpecialRegistrationEntries(lines) {
       popularity,
       odds,
       jockey: normalizeSpecialJockey(detail.jockey),
-      carriedWeight: "",
+      carriedWeight: detail.carriedWeight || "",
       raw: [horseNameLine, detailLine, oddsLine, popularityLine].filter(Boolean).join(" / "),
       parsed: true,
       importSource: "netkeiba特別登録",
@@ -632,12 +632,13 @@ function parseNetkeibaSpecialRegistrationEntries(lines) {
 function parseNetkeibaSpecialDetailLine(line) {
   const value = String(line || "").trim();
   const sexAgePattern = "(?:牡|牝|せん|セン|セ|騙)\\d{1,2}";
-  const match = value.match(new RegExp(`^(${sexAgePattern})\\s+(.+?)のデータベース\\s*(.*?)\\s*未定\\s*$`));
+  const match = value.match(new RegExp(`^(${sexAgePattern})\\s+(.+?)のデータベース\\s*(.*?)(?:\\s+(\\d{2}(?:\\.\\d)?)|\\s*未定)\\s*$`));
   if (!match) return null;
   return {
     sexAge: match[1],
     horseName: cleanHorseName(match[2] || ""),
     jockey: match[3] || "",
+    carriedWeight: match[4] || "",
   };
 }
 
@@ -647,9 +648,17 @@ function normalizeSpecialJockey(value) {
   return jockey;
 }
 
+function isNetkeibaSpecialDetailLine(line) {
+  const value = String(line || "").trim();
+  return /^(?:牡|牝|せん|セン|セ|騙)\d{1,2}\s+.+?のデータベース/.test(value);
+}
+
 function parseSpecialRegistrationLine(line) {
   const value = String(line || "").trim();
   if (!value) return null;
+  if (isNetkeibaSpecialDetailLine(value)) return null;
+  if (/^\d+(?:\.\d+)?$/.test(value)) return null;
+  if (/^\d{1,2}\s*人気$/.test(value)) return null;
   if (/^(馬名|出走予定|特別登録|登録馬|想定騎手|騎手|斤量|性齢|枠|馬番)/.test(value)) return null;
   if (/^\d{1,2}\s*頭?$/.test(value)) return null;
   const cleaned = value
