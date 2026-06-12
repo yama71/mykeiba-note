@@ -181,10 +181,25 @@ function loadJson(key) {
 
 function saveJson(key, value) {
   try {
-    localStorage.setItem(key, JSON.stringify(value));
+    const serialized = JSON.stringify(value);
+    localStorage.setItem(key, serialized);
   } catch (error) {
-    console.error(`saveJson failed: ${key}`, error);
+    console.error(`saveJson failed: ${key}`, error, {
+      key,
+      valueType: Array.isArray(value) ? "array" : typeof value,
+      itemCount: Array.isArray(value) ? value.length : undefined,
+      estimatedWriteSize: formatBytes(estimateJsonBytes(value)),
+      localStorageUsage: formatBytes(estimateLocalStorageUsage().bytes),
+    });
     throw error;
+  }
+}
+
+function estimateJsonBytes(value) {
+  try {
+    return JSON.stringify(value).length * 2;
+  } catch {
+    return 0;
   }
 }
 
@@ -2855,11 +2870,40 @@ function persistRaceCardsToStorage(raceCards) {
   const storageCards = safeArray(raceCards).map(toStorageRaceCard);
   const previousMain = localStorage.getItem(RACE_STORAGE_KEY);
   const previousWeekly = localStorage.getItem(WEEKLY_RACES_COMPAT_KEY);
+  console.info("race card persist: start", {
+    raceCount: storageCards.length,
+    mainKey: RACE_STORAGE_KEY,
+    weeklyKey: WEEKLY_RACES_COMPAT_KEY,
+    payloadSize: formatBytes(estimateJsonBytes(storageCards)),
+    localStorageUsageBefore: formatBytes(estimateLocalStorageUsage().bytes),
+  });
   try {
+    console.info("race card persist: writing main race cards", {
+      key: RACE_STORAGE_KEY,
+      payloadSize: formatBytes(estimateJsonBytes(storageCards)),
+    });
     saveJson(RACE_STORAGE_KEY, storageCards);
+    console.info("race card persist: main race cards saved", {
+      key: RACE_STORAGE_KEY,
+      localStorageUsage: formatBytes(estimateLocalStorageUsage().bytes),
+    });
+    console.info("race card persist: writing weekly compatibility copy", {
+      key: WEEKLY_RACES_COMPAT_KEY,
+      payloadSize: formatBytes(estimateJsonBytes(storageCards)),
+    });
     saveJson(WEEKLY_RACES_COMPAT_KEY, storageCards);
+    console.info("race card persist: weekly compatibility copy saved", {
+      key: WEEKLY_RACES_COMPAT_KEY,
+      localStorageUsageAfter: formatBytes(estimateLocalStorageUsage().bytes),
+    });
   } catch (error) {
-    console.error("persistRaceCardsToStorage failed; rolling back race card writes", error);
+    console.error("persistRaceCardsToStorage failed; rolling back race card writes", error, {
+      raceCount: storageCards.length,
+      payloadSize: formatBytes(estimateJsonBytes(storageCards)),
+      previousMainSize: formatBytes(safeString(previousMain).length * 2),
+      previousWeeklySize: formatBytes(safeString(previousWeekly).length * 2),
+      localStorageUsageAtFailure: formatBytes(estimateLocalStorageUsage().bytes),
+    });
     if (previousMain == null) localStorage.removeItem(RACE_STORAGE_KEY);
     else localStorage.setItem(RACE_STORAGE_KEY, previousMain);
     if (previousWeekly == null) localStorage.removeItem(WEEKLY_RACES_COMPAT_KEY);
@@ -4349,8 +4393,24 @@ export function createKeibaApp(React, icons) {
       try {
         const now = new Date().toISOString();
         const beforeCount = loadJson(RACE_STORAGE_KEY).length;
+        console.info("race card save: start", {
+          beforeCount,
+          localStorageUsage: formatBytes(estimateLocalStorageUsage().bytes),
+          inputEntries: safeArray(raceCard?.entries).length,
+          entryStatus: raceCard?.entryStatus || raceCard?.raceEntryStatus || "",
+        });
         const initialRaceCard = sanitizeRaceCard(toStorageRaceCard({ ...raceCard, createdAt: now, updatedAt: now }));
+        console.info("race card save: normalized", {
+          raceId: initialRaceCard.raceId,
+          raceName: initialRaceCard.raceInfo?.raceName,
+          entryCount: safeArray(initialRaceCard.entries).length,
+          estimatedRaceSize: formatBytes(estimateJsonBytes(initialRaceCard)),
+        });
         const existingCards = getAllRaceCards();
+        console.info("race card save: loaded existing cards", {
+          existingCount: existingCards.length,
+          existingPayloadSize: formatBytes(estimateJsonBytes(existingCards)),
+        });
         const linkedSpecialRace = isOfficialRaceCard(initialRaceCard) ? findSpecialRegistrationRace(initialRaceCard, existingCards) : null;
         const nextRaceCard = linkedSpecialRace
           ? mergeOfficialEntriesIntoSpecialRace(linkedSpecialRace, initialRaceCard)
@@ -4360,7 +4420,18 @@ export function createKeibaApp(React, icons) {
         const linkedRaceCard = existingResult
           ? sanitizeRaceCard({ ...nextRaceCard, result: existingResult, status: "result_registered" })
           : nextRaceCard;
+        console.info("race card save: upserting race card", {
+          raceId: linkedRaceCard.raceId,
+          entryCount,
+          linkedSpecialRace: Boolean(linkedSpecialRace),
+          hasExistingResult: Boolean(existingResult),
+        });
         const { storageRace, next } = upsertRaceCardInStorage(linkedRaceCard);
+        console.info("race card save: race card storage upsert finished", {
+          raceId: storageRace.raceId,
+          nextCount: safeArray(next).length,
+          localStorageUsage: formatBytes(estimateLocalStorageUsage().bytes),
+        });
         const verification = verifyStoredRaceCard(storageRace.raceId, entryCount);
         const allRaceVerification = getAllRaceCards().some((race) => isSameRaceForResult(race, storageRace) && (race.status === "entry_registered" || race.status === "result_registered"));
         if (!verification.ok || !allRaceVerification) {
