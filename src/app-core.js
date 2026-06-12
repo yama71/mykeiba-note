@@ -18,6 +18,7 @@ const TRACK_BIAS_NOTES_STORAGE_KEY = "keiba-track-bias-v1";
 const BACKUP_VERSION = 1;
 const INDEXED_DB_NAME = "keiba-memo-large-store-v1";
 const INDEXED_DB_STORE = "json";
+const AUTO_BASE_TIME_MIN_SAMPLE = 501;
 const STORAGE_ALIASES = {
   horseNotes: MEMO_STORAGE_KEY,
   horseRecords: HORSE_RECORDS_STORAGE_KEY,
@@ -628,6 +629,12 @@ function averageTimeKey(item) {
 
 function normalizeRaceClass(value) {
   const text = String(value || "").trim();
+  if (/^(OP|G1|G2|G3|GI|GII|GIII|L|重賞|オープン)$/i.test(text) || /重賞|G[123I]/i.test(text)) return "OP";
+  if (/新馬|メイクデビュー/.test(text)) return "新馬";
+  if (/未勝利/.test(text)) return "未勝利";
+  if (/3勝|3勝クラス/.test(text)) return "3勝クラス";
+  if (/2勝|2勝クラス/.test(text)) return "2勝クラス";
+  if (/1勝|1勝クラス/.test(text)) return "1勝クラス";
   if (/^(OP|Ｇ?Ⅰ|GⅠ|GI|G1|Ｇ?Ⅱ|GⅡ|GII|G2|Ｇ?Ⅲ|GⅢ|GIII|G3|L|リステッド|オープン|重賞|重賞・OP)$/i.test(text)) return "OP";
   if (/3勝|3勝C|3勝クラス/.test(text)) return "3勝";
   if (/2勝|2勝C|2勝クラス/.test(text)) return "2勝";
@@ -637,8 +644,9 @@ function normalizeRaceClass(value) {
   return text || "未勝利";
 }
 
-function normalizeAverageTimeRow(item) {
+function normalizeAverageTimeRow(item = {}) {
   return {
+    ...item,
     racecourse: item.racecourse || item.track || "",
     surface: item.surface || "",
     distance: Number(item.distance) || "",
@@ -646,6 +654,10 @@ function normalizeAverageTimeRow(item) {
     raceClass: normalizeRaceClass(item.raceClass || ""),
     going: item.going || "標準",
     averageTime: item.averageTime || "",
+    sampleCount: Number(item.sampleCount || item.count || 0),
+    isAutoCalculated: Boolean(item.isAutoCalculated || item.source === "auto"),
+    source: item.source || (item.isAutoCalculated ? "auto" : "manual"),
+    autoKey: item.autoKey || "",
   };
 }
 
@@ -665,7 +677,53 @@ function mergeAverageTimes(...lists) {
   );
 }
 
-function findAverageTime(averageTimes, condition = {}) {
+function autoBaseTimeKey(condition = {}) {
+  return [
+    condition.surface || "",
+    Number(condition.distance) || "",
+    condition.going || condition.trackCondition || "",
+    normalizeRaceClass(condition.raceClass || condition.classCategory || ""),
+  ].join("_");
+}
+
+function secondsToRaceTime(seconds) {
+  const value = Number(seconds);
+  if (!Number.isFinite(value) || value <= 0) return "";
+  if (value >= 60) {
+    const minutes = Math.floor(value / 60);
+    const rest = (value - minutes * 60).toFixed(1).padStart(4, "0");
+    return `${minutes}:${rest}`;
+  }
+  return value.toFixed(1);
+}
+
+function getAutoBaseTime(averageTimes, condition = {}) {
+  const key = autoBaseTimeKey({
+    surface: condition.surface,
+    distance: condition.distance,
+    going: condition.going,
+    raceClass: condition.raceClass,
+  });
+  if (!key.replace(/_/g, "")) return null;
+  return safeArray(averageTimes)
+    .map(normalizeAverageTimeRow)
+    .find((item) => item.isAutoCalculated
+      && Number(item.sampleCount) >= AUTO_BASE_TIME_MIN_SAMPLE
+      && item.autoKey === key) || null;
+}
+
+function getBaseTime(averageTimes, condition = {}) {
+  const auto = getAutoBaseTime(averageTimes, condition);
+  if (auto) return { ...auto, usedSource: "自動算出" };
+  const manual = findAverageTime(averageTimes, condition, { skipAuto: true });
+  return manual ? { ...manual, usedSource: "既存基準タイム" } : null;
+}
+
+function findAverageTime(averageTimes, condition = {}, options = {}) {
+  if (!options.skipAuto) {
+    const auto = getAutoBaseTime(averageTimes, condition);
+    if (auto) return { ...auto, usedSource: "自動算出" };
+  }
   const normalizedClass = normalizeRaceClass(condition.raceClass);
   const normalized = {
     racecourse: condition.racecourse || condition.track || "",
@@ -692,6 +750,72 @@ function findAverageTime(averageTimes, condition = {}) {
     if (found) return found;
   }
   return null;
+}
+
+function buildAutoAverageTimesFromRaceCards(raceCards = []) {
+  const raceMap = new Map();
+  const storedCandidates = storedResultCandidates();
+  const findStoredResult = (race) => {
+    try {
+      const matches = storedCandidates.filter((candidate) => isSameRaceForResult(candidate, race) && resultRowsFromStoredResult(candidate).length > 0);
+      return matches.sort((a, b) => resultDetailScore(b) - resultDetailScore(a))[0] || null;
+    } catch (error) {
+      console.warn("auto average result lookup failed", error);
+      return null;
+    }
+  };
+  sanitizeRaceCards(raceCards).forEach((race) => {
+    const result = findStoredResult(race) || race.result;
+    if (!result) return;
+    const info = race.raceInfo || {};
+    const surface = safeString(info.surface || race.surface || "");
+    const distance = Number(info.distance || race.distance) || 0;
+    const going = safeString(info.going || race.going || "");
+    const raceClass = normalizeRaceClass(info.raceClass || race.raceClass || "");
+    if (!surface || !distance || !going || !raceClass) return;
+    const identity = raceMatchIdentity(race) || race.raceId || race.id;
+    if (!identity || raceMap.has(identity)) return;
+    const rows = sortResultRows(resultRowsFromStoredResult(result));
+    const winner = rows.find(isFinishedResultRow);
+    const winnerSeconds = toSeconds(winner?.time || result.winningTime || result.winnerTime || "");
+    if (winnerSeconds == null) return;
+    const key = autoBaseTimeKey({ surface, distance, going, raceClass });
+    raceMap.set(identity, { key, surface, distance, going, raceClass, winnerSeconds });
+  });
+  const groups = new Map();
+  raceMap.forEach((item) => {
+    const current = groups.get(item.key) || {
+      autoKey: item.key,
+      racecourse: "自動算出",
+      surface: item.surface,
+      distance: item.distance,
+      courseType: "",
+      going: item.going,
+      raceClass: item.raceClass,
+      totalSeconds: 0,
+      sampleCount: 0,
+    };
+    current.totalSeconds += item.winnerSeconds;
+    current.sampleCount += 1;
+    groups.set(item.key, current);
+  });
+  return [...groups.values()].map((group) => {
+    const averageSeconds = group.sampleCount > 0 ? group.totalSeconds / group.sampleCount : 0;
+    return normalizeAverageTimeRow({
+      ...group,
+      averageTime: secondsToRaceTime(averageSeconds),
+      sampleCount: group.sampleCount,
+      isAutoCalculated: true,
+      source: "auto",
+      active: group.sampleCount >= AUTO_BASE_TIME_MIN_SAMPLE,
+      updatedAt: new Date().toISOString(),
+    });
+  });
+}
+
+function mergeAutoAverageTimes(averageTimes = [], raceCards = []) {
+  const manualRows = safeArray(averageTimes).filter((item) => !normalizeAverageTimeRow(item).isAutoCalculated);
+  return mergeAverageTimes(manualRows, buildAutoAverageTimesFromRaceCards(raceCards));
 }
 
 function parseRaceEntries(text) {
@@ -4818,8 +4942,11 @@ export function createKeibaApp(React, icons) {
         persistRaceCardsToStorage(nextCards);
         upsertLegacyRaceResult(updatedRace, resultForSave);
         saveJson(HORSE_RECORDS_STORAGE_KEY, nextHorseRecords);
+        const nextAverageTimes = mergeAutoAverageTimes(averageTimes, nextCards);
+        saveJson(AVERAGE_TIMES_STORAGE_KEY, nextAverageTimes);
         setHorseRecords(nextHorseRecords);
         setRaceCards(nextCards);
+        setAverageTimes(nextAverageTimes);
         notify("レース結果を保存しました");
         navigate("race");
       } catch (error) {
@@ -4876,6 +5003,18 @@ export function createKeibaApp(React, icons) {
         notify(`重複戦績を削除しました：${before - deduped.length}件`);
       } catch (error) {
         reportSaveError("Horse records dedupe failed", error);
+      }
+    }
+
+    function recalculateAverageTimesFromResults() {
+      try {
+        const nextAverageTimes = mergeAutoAverageTimes(averageTimes, getAllRaceCards());
+        saveJson(AVERAGE_TIMES_STORAGE_KEY, nextAverageTimes);
+        setAverageTimes(nextAverageTimes);
+        const autoCount = safeArray(nextAverageTimes).filter((item) => normalizeAverageTimeRow(item).isAutoCalculated).length;
+        notify(`登録済みレースから平均タイムを再計算しました：${autoCount}条件`);
+      } catch (error) {
+        reportSaveError("Average time recalculation failed", error);
       }
     }
 
@@ -4978,7 +5117,7 @@ export function createKeibaApp(React, icons) {
         screen === "importantFactors" && h(ImportantFactorDetailPage, { selectedRaceId: selectedPredictionRaceId, raceCards, horseRecords, memos, averageTimes, factorNotes, trackBiasNotes, onSaveFactorNote: saveFactorNote }),
         screen === "trackBias" && h(TrackBiasDetailPage, { selectedRaceId: selectedPredictionRaceId, raceCards, horseRecords, averageTimes, trackBiasNotes, onSaveTrackBiasNote: saveTrackBiasNote }),
         screen === "deleteResults" && h(RaceResultDeleteScreen, { raceCards, horseRecords, onDeleteResult: deleteRaceResultByRaceId }),
-        screen === "average" && h(AverageTimesScreen, { averageTimes }),
+        screen === "average" && h(AverageTimesScreen, { averageTimes, onRecalculate: recalculateAverageTimesFromResults }),
         screen === "diagnostic" && h(DataDiagnosticScreen, { setScreen: navigate, onRepairHorseRecords: repairHorseRecordsManual, onDedupeHorseRecords: removeDuplicateHorseRecordsManual }),
         screen === "backup" && h(BackupScreen, { memos, raceCards, horseRecords, averageTimes, setMemos, setRaceCards, setHorseRecords, setAverageTimes, notify, setScreen: navigate, deleteEntryOnlyHorseRecords }),
           screen === "list" && h(HorseList, { horseStats, horseRecords, openHorse, setScreen: navigate }),
@@ -5494,18 +5633,21 @@ export function createKeibaApp(React, icons) {
     );
   }
 
-  function AverageTimesScreen({ averageTimes }) {
+  function AverageTimesScreen({ averageTimes, onRecalculate }) {
     const [query, setQuery] = useState("");
     const [trackFilter, setTrackFilter] = useState("");
-    const filtered = safeArray(averageTimes).filter((item) => {
-      const text = `${item.racecourse} ${item.surface} ${item.distance} ${item.courseType || ""} ${item.raceClass} ${item.going} ${item.averageTime}`;
-      return (!trackFilter || item.racecourse === trackFilter) && text.includes(query.trim());
+    const rows = safeArray(averageTimes).map(normalizeAverageTimeRow);
+    const manualRows = rows.filter((item) => !item.isAutoCalculated);
+    const filtered = rows.filter((item) => {
+      const text = `${item.racecourse} ${item.surface} ${item.distance} ${item.courseType || ""} ${item.raceClass} ${item.going} ${item.averageTime} ${item.sampleCount || ""} ${item.isAutoCalculated ? "自動算出" : "既存基準タイム"}`;
+      return (!trackFilter || item.racecourse === trackFilter || item.isAutoCalculated) && text.includes(query.trim());
     });
 
     return h("section", { className: "screen average-screen" },
       h("div", { className: "backup-panel" },
         h("h2", null, "平均タイムマスター"),
-        h("p", null, `${safeArray(averageTimes).length}件の平均タイムを登録済みです。OP・重賞・G1などはOPとして扱います。馬場状態が合わない時は標準の平均タイムを使います。`)
+        h("p", null, `${rows.length}件の平均タイムを登録済みです。登録済み結果から条件別の勝ち時計平均を算出し、501件以上の条件だけ自動基準タイムとして使います。`),
+        h("button", { type: "button", className: "primary full-button", onClick: onRecalculate }, "登録済みレースから再計算")
       ),
       h("div", { className: "two-col" },
         h(Field, { label: "競馬場で絞り込み" }, h("select", { value: trackFilter, onChange: (event) => setTrackFilter(event.target.value) },
@@ -5514,12 +5656,25 @@ export function createKeibaApp(React, icons) {
         )),
         h(Field, { label: "キーワード検索" }, h("input", { value: query, onChange: (event) => setQuery(event.target.value), placeholder: "例：東京 芝 1600 OP" }))
       ),
-      h("div", { className: "average-list" }, filtered.slice(0, 160).map((item) => h("article", { className: "average-card", key: averageTimeKey(item) },
-        h("strong", null, `${item.racecourse} ${item.surface}${item.distance}${item.courseType ? ` ${item.courseType}` : ""}`),
-        h("span", null, `${item.raceClass} / ${item.going}`),
-        h("b", null, item.averageTime)
-      ))),
-      filtered.length > 160 && h("p", { className: "lookup-note" }, `表示は先頭160件です。検索すると絞り込めます。`)
+      h("div", { className: "average-list" }, filtered.slice(0, 160).map((item) => {
+        const activeAuto = item.isAutoCalculated && item.sampleCount >= AUTO_BASE_TIME_MIN_SAMPLE;
+        const manual = item.isAutoCalculated ? findAverageTime(manualRows, item, { skipAuto: true }) : null;
+        const usedTime = activeAuto ? item.averageTime : (item.isAutoCalculated ? (manual?.averageTime || "-") : (item.averageTime || "-"));
+        const sourceLabel = activeAuto ? "自動算出" : (item.isAutoCalculated ? "既存基準タイム" : "手入力");
+        const reason = item.isAutoCalculated && !activeAuto ? "理由：サンプル数不足" : "";
+        const sampleText = item.isAutoCalculated ? `${item.sampleCount || 0}件` : "-";
+        return h("article", { className: "average-card", key: averageTimeKey(item) },
+          h("strong", null, `${item.surface}${item.distance}m ${item.going} ${item.raceClass}`),
+          h("span", null, item.isAutoCalculated ? "登録済み結果から自動算出" : `${item.racecourse} ${item.courseType || ""}`.trim()),
+          h("span", null, `登録数：${sampleText}`),
+          h("span", null, `平均タイム：${item.averageTime || "-"}`),
+          h("span", null, `自動反映：${activeAuto ? "対象" : item.isAutoCalculated ? "対象外" : "手入力"}`),
+          h("b", null, `使用中基準タイム：${usedTime}`),
+          h("span", null, `使用元：${sourceLabel}`),
+          reason && h("span", { className: "lookup-note" }, reason)
+        );
+      })),
+      filtered.length > 160 && h("p", { className: "lookup-note" }, "表示は先頭160件です。検索すると絞り込めます。")
     );
   }
 
