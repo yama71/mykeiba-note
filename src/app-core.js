@@ -1941,6 +1941,9 @@ function mergeOfficialEntriesIntoSpecialRace(specialRace = {}, officialRace = {}
       frameNumber: officialEntry.frameNumber || officialEntry.frame || entry.frameNumber || "",
       horseNumber: officialEntry.horseNumber || entry.horseNumber || "",
       jockey: officialEntry.jockey || entry.jockey || "",
+      carriedWeight: officialEntry.carriedWeight || officialEntry.weight || entry.carriedWeight || entry.weight || "",
+      popularity: officialEntry.popularity || entry.popularity || "",
+      odds: officialEntry.odds || entry.odds || "",
       status: officialEntry.status || "",
       isScratched: Boolean(officialEntry.isScratched),
       isExcluded: Boolean(officialEntry.isExcluded),
@@ -4395,6 +4398,7 @@ export function createKeibaApp(React, icons) {
     const [selectedHorse, setSelectedHorse] = useState("");
     const [selectedRaceId, setSelectedRaceId] = useState("");
     const [selectedPredictionRaceId, setSelectedPredictionRaceId] = useState("");
+    const [officialOverwriteTargetRaceId, setOfficialOverwriteTargetRaceId] = useState("");
     const [paceNotes, setPaceNotes] = useState(() => loadJson(PACE_NOTES_STORAGE_KEY).map(normalizePaceNote));
     const [factorNotes, setFactorNotes] = useState(() => loadJson(FACTOR_NOTES_STORAGE_KEY).map(normalizeFactorNote));
     const [trackBiasNotes, setTrackBiasNotes] = useState(() => loadJson(TRACK_BIAS_NOTES_STORAGE_KEY).map(normalizeTrackBiasNote));
@@ -4503,6 +4507,7 @@ export function createKeibaApp(React, icons) {
     }
 
     function navigate(nextScreen) {
+      if (nextScreen !== "import") setOfficialOverwriteTargetRaceId("");
       setNavigationHistory((current) => screen === nextScreen ? current : [...current, screen].slice(-20));
       setScreen(nextScreen);
     }
@@ -4817,6 +4822,12 @@ export function createKeibaApp(React, icons) {
       navigate("result");
     }
 
+    function openOfficialOverwriteImport(raceId) {
+      setSelectedRaceId(raceId);
+      setOfficialOverwriteTargetRaceId(raceId);
+      navigate("import");
+    }
+
     function openRaceDetail(raceId) {
       setSelectedRaceId(raceId);
       navigate("race");
@@ -4941,9 +4952,15 @@ export function createKeibaApp(React, icons) {
           ),
           screen === "home" && h(Home, { raceCards, horseRecords, setScreen: navigate, openRaceDetail, safeHomeMode }),
           screen === "add" && h(AddMemo, { onSave: addMemo, onCancel: goBack }),
-          screen === "import" && h(RaceImport, { onSave: addRaceCard }),
+          screen === "import" && h(RaceImport, {
+            onSave: addRaceCard,
+            overwriteTargetRace: officialOverwriteTargetRaceId
+              ? getAllRaceCards().find((race) => race.id === officialOverwriteTargetRaceId || race.raceId === officialOverwriteTargetRaceId || isSameRaceForResult(race, { id: officialOverwriteTargetRaceId, raceId: officialOverwriteTargetRaceId }))
+              : null,
+            onOverwriteComplete: () => setOfficialOverwriteTargetRaceId(""),
+          }),
           screen === "result" && h(ResultImport, { raceCards, horseRecords, selectedRaceId, averageTimes, onSave: saveRaceResult, openHorse }),
-        screen === "race" && h(RaceDetail, { raceCards, selectedRaceId, averageTimes, horseRecords, openHorse, openResultImport, setScreen: navigate, goBack, goHome, deleteRaceEntryOnly, onForceRecalculateRace: forceRecalculateCurrentRace }),
+        screen === "race" && h(RaceDetail, { raceCards, selectedRaceId, averageTimes, horseRecords, openHorse, openResultImport, openOfficialOverwriteImport, setScreen: navigate, goBack, goHome, deleteRaceEntryOnly, onForceRecalculateRace: forceRecalculateCurrentRace }),
         screen === "races" && h(RegisteredRaceList, { raceCards, averageTimes, horseRecords, openRaceDetail, deleteRaceEntryOnly, setScreen: navigate, registeredListState, setRegisteredListState }),
         screen === "prediction" && h(PredictionPage, { raceCards, horseRecords, openPredictionRace }),
         screen === "predictionRace" && h(PredictionRacePage, { selectedRaceId: selectedPredictionRaceId, raceCards, horseRecords, memos, paceNotes, averageTimes, trackBiasNotes, openHorse, openRaceDetail, openPacePrediction, openImportantFactors, openTrackBias }),
@@ -5028,8 +5045,17 @@ export function createKeibaApp(React, icons) {
     );
   }
 
-  function RaceImport({ onSave }) {
-    const [raceInfo, setRaceInfo] = useState(emptyRaceInfo);
+  function RaceImport({ onSave, overwriteTargetRace = null, onOverwriteComplete = () => {} }) {
+    const overwriteTarget = overwriteTargetRace ? sanitizeRaceCard(overwriteTargetRace) : null;
+    const overwriteInfo = overwriteTarget?.raceInfo || {};
+    const [raceInfo, setRaceInfo] = useState(() => overwriteTarget ? {
+      ...emptyRaceInfo,
+      ...overwriteInfo,
+      raceDate: overwriteInfo.raceDate || overwriteTarget.date || "",
+      track: overwriteInfo.track || overwriteTarget.racecourse || emptyRaceInfo.track,
+      raceNumber: overwriteInfo.raceNumber || overwriteTarget.raceNumber || "",
+      raceName: overwriteInfo.raceName || overwriteTarget.raceName || "",
+    } : emptyRaceInfo);
     const [pasteText, setPasteText] = useState("");
     const [entries, setEntries] = useState([]);
     const [warning, setWarning] = useState("");
@@ -5055,11 +5081,12 @@ export function createKeibaApp(React, icons) {
     }
 
     function analyze() {
-      const parsedEntries = entryStatus === "special_registered"
+      const effectiveEntryStatus = overwriteTarget ? "official_entry" : entryStatus;
+      const parsedEntries = effectiveEntryStatus === "special_registered"
         ? parseSpecialRegistrationEntries(pasteText)
         : parseRaceEntries(pasteText);
       setEntries(parsedEntries);
-      setImportFormat(entryStatus === "special_registered"
+      setImportFormat(effectiveEntryStatus === "special_registered"
         ? "特別登録"
         : (parsedEntries.some((entry) => entry.importSource === "netkeiba形式") ? "netkeiba形式" : (parsedEntries.some((entry) => entry.parsed) ? "JRA公式形式" : "未判定")));
       const validCount = parsedEntries.filter((entry) => normalizeHorseName(entry.horseName)).length;
@@ -5071,6 +5098,7 @@ export function createKeibaApp(React, icons) {
 
     function submit(event) {
       event.preventDefault();
+      const effectiveEntryStatus = overwriteTarget ? "official_entry" : entryStatus;
       const preparedRaceCard = {
         raceInfo: {
           ...raceInfo,
@@ -5080,8 +5108,8 @@ export function createKeibaApp(React, icons) {
           surface: raceInfo.surface || "",
           going: raceInfo.going || "",
         },
-        entryStatus,
-        raceEntryStatus: entryStatus,
+        entryStatus: effectiveEntryStatus,
+        raceEntryStatus: effectiveEntryStatus,
         entries: safeEntries.map(({ id, frameNumber, horseNumber, horseName, sexAge, popularity, odds, jockey, carriedWeight, raw, parsed, status, isScratched }) => ({
           id,
           frameNumber: String(frameNumber || "").trim(),
@@ -5114,9 +5142,11 @@ export function createKeibaApp(React, icons) {
         return;
       }
       let raceToSave = validation.race;
-      const specialTarget = entryStatus === "official_entry" ? findSpecialRegistrationRace(validation.race, existingRaceCards) : null;
+      const specialTarget = overwriteTarget && effectiveEntryStatus === "official_entry"
+        ? overwriteTarget
+        : (effectiveEntryStatus === "official_entry" ? findSpecialRegistrationRace(validation.race, existingRaceCards) : null);
       if (specialTarget) {
-        const confirmed = window.confirm("同じ開催日・レース名の特別登録レースがあります。正式出走表で更新しますか？\n\n枠番・馬番・騎手・出走状態だけを更新し、予想メモ・印・能力評価・コメントは残します。");
+        const confirmed = window.confirm("同じ開催日・レース名の特別登録レースがあります。正式出走表で更新しますか？\n\n枠番・馬番・騎手・斤量・人気・オッズ・出走状態だけを更新し、予想メモ・印・能力評価・コメント・買い目は残します。");
         if (!confirmed) {
           setWarning("正式出走表での更新をキャンセルしました。");
           return;
@@ -5149,10 +5179,16 @@ export function createKeibaApp(React, icons) {
       }
       setWarning("");
       setSaveMessage(`${result.message} / ${result.confirmation}`);
+      if (overwriteTarget) onOverwriteComplete();
       setSaveDebug({ beforeCount: result.debug.beforeCount, afterCount: result.debug.afterCount, raceId: result.debug.raceId, status: "成功" });
     }
 
     return h("form", { className: "screen form-screen", onSubmit: submit },
+      overwriteTarget && h("div", { className: "warning-panel" },
+        h("strong", null, "正式出走表で上書き"),
+        h("p", null, `${overwriteInfo.raceDate || ""} ${overwriteInfo.track || ""}${raceNumberLabel(overwriteInfo.raceNumber)} ${overwriteInfo.raceName || ""}`.trim()),
+        h("p", null, "現在開いている特別登録レースに、正式出走表の枠番・馬番・騎手・斤量・人気・オッズ・出走状態だけを反映します。予想メモや印は残します。")
+      ),
       h(Field, { label: "出走表の種類" }, h("select", { value: entryStatus, onChange: (event) => setEntryStatus(event.target.value) },
         h("option", { value: "official_entry" }, "正式出走表"),
         h("option", { value: "special_registered" }, "特別登録")
@@ -5823,7 +5859,7 @@ export function createKeibaApp(React, icons) {
     );
   }
 
-  function RaceDetail({ raceCards, selectedRaceId, averageTimes, horseRecords = [], openHorse, openResultImport, setScreen, goBack, goHome, deleteRaceEntryOnly, onForceRecalculateRace }) {
+  function RaceDetail({ raceCards, selectedRaceId, averageTimes, horseRecords = [], openHorse, openResultImport, openOfficialOverwriteImport, setScreen, goBack, goHome, deleteRaceEntryOnly, onForceRecalculateRace }) {
     const [showAllResults, setShowAllResults] = useState(false);
     const [showEntries, setShowEntries] = useState(false);
     const storedRaceCards = getAllRaceCards();
@@ -5877,6 +5913,7 @@ export function createKeibaApp(React, icons) {
       info.turfGoing ? `芝:${info.turfGoing}` : "",
       info.dirtGoing ? `ダ:${info.dirtGoing}` : "",
     ].filter(Boolean);
+    const canOverwriteOfficialEntry = isSpecialRaceCard(raceWithResult) && typeof openOfficialOverwriteImport === "function";
 
     return h("section", { className: "screen race-detail-screen" },
       h("article", { className: "race-detail-hero" },
@@ -5893,6 +5930,9 @@ export function createKeibaApp(React, icons) {
           ),
           h(RaceLapPanel, { result: resultMeta, raceInfo: info }),
           h(CornerPassagePanel, { result: resultMeta }),
+          canOverwriteOfficialEntry && h("div", { className: "race-detail-actions" },
+            h("button", { type: "button", className: "primary", onClick: () => openOfficialOverwriteImport(raceWithResult.raceId || raceWithResult.id) }, "正式出走表で上書き")
+          ),
           h("div", { className: "race-detail-actions" },
             shouldForceFukushima1150DisplayFromLaps(resultMeta, info) && h("button", { type: "button", className: "secondary", onClick: () => onForceRecalculateRace && onForceRecalculateRace(raceWithResult) }, "このレースを再計算"),
             h("button", { type: "button", className: "secondary", onClick: () => setShowAllResults((current) => !current) }, showAllResults ? "全着順を閉じる" : "全着順を見る"),
@@ -5905,6 +5945,9 @@ export function createKeibaApp(React, icons) {
           renderResultStatus()
         )
         : h(React.Fragment, null,
+          canOverwriteOfficialEntry && h("div", { className: "race-detail-actions" },
+            h("button", { type: "button", className: "secondary", onClick: () => openOfficialOverwriteImport(raceWithResult.raceId || raceWithResult.id) }, "正式出走表で上書き")
+          ),
           h("div", { className: "race-detail-actions" },
             h("button", { type: "button", className: "primary", onClick: () => openResultImport(race.id) }, "このレースの結果を登録"),
             h("button", { type: "button", className: "secondary", onClick: () => setScreen("add") }, "このレースの回顧メモを書く")
