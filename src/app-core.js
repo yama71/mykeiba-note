@@ -1911,12 +1911,20 @@ function findSpecialRegistrationRace(officialRace = {}, existingRaceCards = []) 
   const official = sanitizeRaceCard(officialRace);
   const targetDate = safeString(official.raceInfo?.raceDate || official.date || "");
   const targetName = normalizeHorseName(official.raceInfo?.raceName || official.raceName || "");
+  const targetTrack = safeString(official.raceInfo?.track || official.racecourse || "");
+  const targetNumber = raceNumberLabel(official.raceInfo?.raceNumber || official.raceNumber || "");
   if (!targetDate || !targetName) return null;
   return safeArray(existingRaceCards).map(sanitizeRaceCard).find((candidate) => {
     const info = candidate.raceInfo || {};
+    const candidateTrack = safeString(info.track || candidate.racecourse || "");
+    const candidateNumber = raceNumberLabel(info.raceNumber || candidate.raceNumber || "");
+    const trackMatches = !targetTrack || !candidateTrack || targetTrack === candidateTrack;
+    const numberMatches = !targetNumber || targetNumber === "-" || !candidateNumber || candidateNumber === "-" || targetNumber === candidateNumber;
     return isSpecialRaceCard(candidate)
       && safeString(info.raceDate || candidate.date || "") === targetDate
-      && normalizeHorseName(info.raceName || candidate.raceName || "") === targetName;
+      && normalizeHorseName(info.raceName || candidate.raceName || "") === targetName
+      && trackMatches
+      && numberMatches;
   }) || null;
 }
 
@@ -2860,7 +2868,7 @@ function getAllRaceCardsSafe() {
     const map = new Map();
     [...rawRaceCards, ...rawWeeklyRaces, ...raceEntryCards].forEach((item) => {
       const normalized = normalizeRaceCardForList(item);
-      const key = raceMatchIdentity(normalized) || normalized.raceId || raceCardListKey(item) || makeId("race-list");
+      const key = normalized.raceId || normalized.id || raceMatchIdentity(normalized) || raceCardListKey(item) || makeId("race-list");
       const current = map.get(key);
       if (!current) {
         map.set(key, normalized);
@@ -3065,7 +3073,11 @@ function persistRaceCardsToStorage(raceCards) {
 function upsertRaceCardInStorage(raceCard) {
   const storageRace = toStorageRaceCard(raceCard);
   const current = loadJson(RACE_STORAGE_KEY).map(toStorageRaceCard);
-  const next = [storageRace, ...current.filter((race) => !isSameRaceForResult(race, storageRace))];
+  const storageId = safeString(storageRace.raceId || storageRace.id);
+  const next = [storageRace, ...current.filter((race) => {
+    const currentId = safeString(race.raceId || race.id);
+    return !storageId || !currentId || currentId !== storageId;
+  })];
   persistRaceCardsToStorage(next);
   return { storageRace, next };
 }
@@ -3188,9 +3200,7 @@ function inspectRaceCardBeforeSave(raceCard, existingRaceCards = []) {
     return safe.raceId === raceId
       || (info.raceDate && target.raceDate && info.raceDate === target.raceDate
         && info.track === target.track
-        && raceNumberLabel(info.raceNumber) === raceNumberLabel(target.raceNumber))
-      || (info.raceDate && target.raceDate && info.raceDate === target.raceDate
-        && normalizeHorseName(info.raceName) && normalizeHorseName(info.raceName) === normalizeHorseName(target.raceName));
+        && raceNumberLabel(info.raceNumber) === raceNumberLabel(target.raceNumber));
   });
 
   if (entries.length === 0) fatals.push("entries が0件です");
