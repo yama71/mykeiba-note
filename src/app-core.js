@@ -19,6 +19,7 @@ const BACKUP_VERSION = 1;
 const INDEXED_DB_NAME = "keiba-memo-large-store-v1";
 const INDEXED_DB_STORE = "json";
 const AUTO_BASE_TIME_MIN_SAMPLE = 501;
+const BIAS_JUDGEMENT_OPTIONS = ["バイアス通り", "バイアス逆", "判別不能"];
 const STORAGE_ALIASES = {
   horseNotes: MEMO_STORAGE_KEY,
   horseRecords: HORSE_RECORDS_STORAGE_KEY,
@@ -4024,6 +4025,7 @@ function normalizeTrackBiasNote(note = {}) {
     finishPosition: safeString(note.finishPosition || ""),
     coursePath: ["内", "中", "外", "不明"].includes(note.coursePath) ? note.coursePath : "不明",
     runningStyle: ["逃げ", "先行", "好位差し", "差し", "追込", "不明"].includes(note.runningStyle) ? note.runningStyle : "不明",
+    biasJudgement: BIAS_JUDGEMENT_OPTIONS.includes(note.biasJudgement) ? note.biasJudgement : "判別不能",
     createdAt: note.createdAt || "",
     updatedAt: note.updatedAt || "",
   };
@@ -4048,6 +4050,144 @@ function getTrackBiasNote(notes, race, row) {
       && safeString(note.horseNumber) === safeString(base.horseNumber)
       && safeString(note.finishPosition) === safeString(base.finishPosition))
     || base);
+}
+
+function normalizeJockeyName(value) {
+  const text = safeString(value || "").replace(/\s+/g, "").replace(/^[▲△☆◇★▽]+/, "").trim();
+  if (!text || text === "未定" || text === "〇〇" || text === "○○") return "";
+  return text;
+}
+
+function jockeyRate(part, total) {
+  const denominator = Number(total) || 0;
+  if (!denominator) return "0.0%";
+  return `${((Number(part) || 0) / denominator * 100).toFixed(1)}%`;
+}
+
+function memoMatchesRecord(memo = {}, record = {}) {
+  const memoHorse = normalizeHorseName(memo.horseName || "");
+  const recordHorse = normalizeHorseName(record.horseName || "");
+  if (!memoHorse || memoHorse !== recordHorse) return false;
+  const memoRaceId = safeString(memo.raceId || "");
+  const recordRaceId = safeString(record.raceId || "");
+  if (memoRaceId && recordRaceId && memoRaceId === recordRaceId) return true;
+  const memoDate = getDateKeySafe(memo.date || memo.raceDate || "");
+  const recordDate = getDateKeySafe(record.raceDate || record.date || "");
+  const memoTrack = safeString(memo.racecourse || memo.track || "");
+  const recordTrack = safeString(record.track || record.racecourse || "");
+  const memoRaceNumber = normalizeRaceNumber(memo.raceNumber || "");
+  const recordRaceNumber = normalizeRaceNumber(record.raceNumber || record.R || "");
+  return Boolean(memoDate && recordDate && memoDate === recordDate
+    && (!memoTrack || !recordTrack || memoTrack === recordTrack)
+    && (!memoRaceNumber || !recordRaceNumber || memoRaceNumber === recordRaceNumber));
+}
+
+function tagsForRecord(record, memos = []) {
+  return safeArray(memos)
+    .filter((memo) => memoMatchesRecord(memo, record))
+    .flatMap((memo) => [...safeArray(memo.tags), ...safeArray(memo.troubleTags), ...safeArray(memo.strongTags), ...safeArray(memo.buyTags)])
+    .filter(Boolean);
+}
+
+function isFrontRunningRecord(record = {}) {
+  const fieldSize = Number(record.fieldSize || 0);
+  const corner = Number(record.corner4 || record.corner3 || 0);
+  if (Number.isFinite(corner) && corner > 0) {
+    const frontLimit = fieldSize > 0 ? Math.ceil(fieldSize / 3) : 5;
+    return corner <= frontLimit;
+  }
+  return false;
+}
+
+function jockeyBiasNoteBase(record = {}) {
+  return {
+    date: record.raceDate || record.date || "",
+    racecourse: record.track || record.racecourse || "",
+    surface: record.surface || "",
+    raceId: record.raceId || "",
+    horseNumber: record.horseNumber || "",
+    horseName: record.horseName || "",
+    finishPosition: record.finish || "",
+  };
+}
+
+function findTrackBiasNoteForRecord(notes = [], record = {}) {
+  const base = jockeyBiasNoteBase(record);
+  const key = trackBiasNoteKey(base);
+  return normalizeTrackBiasNote(safeArray(notes).find((note) => note.id === key)
+    || safeArray(notes).find((note) => safeString(note.raceId) === safeString(base.raceId)
+      && safeString(note.horseNumber) === safeString(base.horseNumber)
+      && safeString(note.finishPosition) === safeString(base.finishPosition))
+    || base);
+}
+
+function buildJockeyStats(horseRecords = [], memos = [], trackBiasNotes = []) {
+  const map = new Map();
+  safeArray(horseRecords).forEach((record) => {
+    if (!/^\d+$/.test(safeString(record.finish || ""))) return;
+    const jockeyName = normalizeJockeyName(record.jockey || "");
+    if (!jockeyName) return;
+    const tags = tagsForRecord(record, memos);
+    const biasNote = findTrackBiasNoteForRecord(trackBiasNotes, record);
+    const finish = Number(record.finish);
+    const existing = map.get(jockeyName) || {
+      jockeyName,
+      rides: 0,
+      first: 0,
+      second: 0,
+      third: 0,
+      fourth: 0,
+      fifth: 0,
+      sixthOrLower: 0,
+      slowStartCount: 0,
+      frontCount: 0,
+      biasTargetCount: 0,
+      biasMatchedCount: 0,
+      biasOppositeCount: 0,
+      biasUnknownCount: 0,
+      records: [],
+    };
+    existing.rides += 1;
+    if (finish === 1) existing.first += 1;
+    else if (finish === 2) existing.second += 1;
+    else if (finish === 3) existing.third += 1;
+    else if (finish === 4) existing.fourth += 1;
+    else if (finish === 5) existing.fifth += 1;
+    else existing.sixthOrLower += 1;
+    const slowStart = tags.includes("出遅れ");
+    if (slowStart) existing.slowStartCount += 1;
+    const frontRunning = isFrontRunningRecord(record);
+    if (frontRunning) existing.frontCount += 1;
+    const biasJudgement = biasNote.biasJudgement || "判別不能";
+    if (biasJudgement === "バイアス通り") {
+      existing.biasTargetCount += 1;
+      existing.biasMatchedCount += 1;
+    } else if (biasJudgement === "バイアス逆") {
+      existing.biasTargetCount += 1;
+      existing.biasOppositeCount += 1;
+    } else {
+      existing.biasUnknownCount += 1;
+    }
+    existing.records.push({
+      ...record,
+      jockeyName,
+      tags: [...new Set(tags)],
+      slowStart,
+      frontRunning,
+      biasJudgement,
+    });
+    map.set(jockeyName, existing);
+  });
+  return [...map.values()]
+    .map((stat) => ({
+      ...stat,
+      recordText: `${stat.first}-${stat.second}-${stat.third}-${stat.fourth}-${stat.fifth}-${stat.sixthOrLower}`,
+      slowStartRate: jockeyRate(stat.slowStartCount, stat.rides),
+      frontRate: jockeyRate(stat.frontCount, stat.rides),
+      biasAdaptRate: jockeyRate(stat.biasMatchedCount, stat.biasTargetCount),
+      records: stat.records.sort((a, b) => safeString(b.raceDate || b.date).localeCompare(safeString(a.raceDate || a.date))),
+    }))
+    .sort((a, b) => b.rides - a.rides || b.first - a.first || a.jockeyName.localeCompare(b.jockeyName, "ja"));
 }
 
 function getTrackBiasReferenceRaces(targetRace, raceCards = []) {
@@ -4539,6 +4679,7 @@ export function createKeibaApp(React, icons) {
     });
     const [averageTimes, setAverageTimes] = useState(() => mergeAverageTimes(loadJson(AVERAGE_TIMES_STORAGE_KEY), defaultAverageTimes));
     const [selectedHorse, setSelectedHorse] = useState("");
+    const [selectedJockey, setSelectedJockey] = useState("");
     const [selectedRaceId, setSelectedRaceId] = useState("");
     const [selectedPredictionRaceId, setSelectedPredictionRaceId] = useState("");
     const [officialOverwriteTargetRaceId, setOfficialOverwriteTargetRaceId] = useState("");
@@ -5094,6 +5235,11 @@ export function createKeibaApp(React, icons) {
       setTrackBiasNotes((current) => [nextNote, ...safeArray(current).filter((note) => note.id !== key)]);
     }
 
+    function openJockey(jockeyName) {
+      setSelectedJockey(normalizeJockeyName(jockeyName));
+      navigate("jockeyDetail");
+    }
+
     function openHorse(horseName) {
       setSelectedHorse(normalizeHorseName(horseName));
       navigate("horse");
@@ -5127,6 +5273,8 @@ export function createKeibaApp(React, icons) {
         screen === "trackBias" && h(TrackBiasDetailPage, { selectedRaceId: selectedPredictionRaceId, raceCards, horseRecords, averageTimes, trackBiasNotes, onSaveTrackBiasNote: saveTrackBiasNote }),
         screen === "deleteResults" && h(RaceResultDeleteScreen, { raceCards, horseRecords, onDeleteResult: deleteRaceResultByRaceId }),
         screen === "average" && h(AverageTimesScreen, { averageTimes, onRecalculate: recalculateAverageTimesFromResults }),
+        screen === "jockeys" && h(JockeyStatsScreen, { horseRecords, memos, trackBiasNotes, openJockey }),
+        screen === "jockeyDetail" && h(JockeyDetailScreen, { selectedJockey, horseRecords, memos, trackBiasNotes, onSaveBiasJudgement: saveTrackBiasNote }),
         screen === "diagnostic" && h(DataDiagnosticScreen, { setScreen: navigate, onRepairHorseRecords: repairHorseRecordsManual, onDedupeHorseRecords: removeDuplicateHorseRecordsManual }),
         screen === "backup" && h(BackupScreen, { memos, raceCards, horseRecords, averageTimes, setMemos, setRaceCards, setHorseRecords, setAverageTimes, notify, setScreen: navigate, deleteEntryOnlyHorseRecords }),
           screen === "list" && h(HorseList, { horseStats, horseRecords, openHorse, setScreen: navigate }),
@@ -5181,6 +5329,7 @@ export function createKeibaApp(React, icons) {
         h(HomeAction, { title: "レース結果インポート", text: "登録済みレースに結果を貼り付け", icon: h(ClipboardList, { size: 20 }), onClick: () => setScreen("result") }),
         h(HomeAction, { title: "馬名検索", text: "メモと成績から馬を探す", icon: h(Search, { size: 20 }), onClick: () => setScreen("search") }),
         h(HomeAction, { title: "馬別成績一覧", text: "馬ごとの履歴を見る", icon: h(ListChecks, { size: 20 }), onClick: () => setScreen("list") }),
+        h(HomeAction, { title: "騎手成績", text: "騎手ごとの成績と傾向を見る", icon: h(Star, { size: 20 }), onClick: () => setScreen("jockeys") }),
         h(HomeAction, { title: "登録済みレース一覧", text: "保存した全レースを見る", icon: h(Trophy, { size: 20 }), onClick: () => setScreen("races") }),
         h(HomeAction, { title: "回顧メモ追加", text: "気づいた馬をメモする", icon: h(Plus, { size: 20 }), onClick: () => setScreen("add") }),
         h(HomeAction, { title: "今週のレース", text: "登録済みレース一覧へ", icon: h(Trophy, { size: 20 }), onClick: () => document.getElementById("weekly-races")?.scrollIntoView({ behavior: "smooth" }) }),
@@ -5684,6 +5833,100 @@ export function createKeibaApp(React, icons) {
         );
       })),
       filtered.length > 160 && h("p", { className: "lookup-note" }, "表示は先頭160件です。検索すると絞り込めます。")
+    );
+  }
+
+  function JockeyStatsScreen({ horseRecords, memos, trackBiasNotes, openJockey }) {
+    const [query, setQuery] = useState("");
+    const stats = buildJockeyStats(horseRecords, memos, trackBiasNotes);
+    const filtered = stats.filter((stat) => stat.jockeyName.includes(query.trim()));
+
+    return h("section", { className: "screen" },
+      h(SectionTitle, { icon: h(Star, { size: 18 }), title: "騎手成績" }),
+      h(Field, { label: "騎手名検索" }, h("input", { value: query, onChange: (event) => setQuery(event.target.value), placeholder: "例：川田" })),
+      filtered.length === 0
+        ? h(EmptyState, { title: "騎手成績がありません", text: "結果インポートを登録すると、騎手ごとの成績が自動集計されます。" })
+        : h("div", { className: "average-list" }, filtered.slice(0, 160).map((stat) => h("button", {
+          type: "button",
+          key: stat.jockeyName,
+          className: "average-card",
+          onClick: () => openJockey(stat.jockeyName),
+        },
+          h("strong", null, stat.jockeyName),
+          h("b", null, stat.recordText),
+          h("span", null, `騎乗数：${stat.rides}`),
+          h("span", null, `1着:${stat.first} / 2着:${stat.second} / 3着:${stat.third} / 4着:${stat.fourth} / 5着:${stat.fifth} / 6着以下:${stat.sixthOrLower}`),
+          h("span", null, `出遅れ：${stat.slowStartCount}/${stat.rides} (${stat.slowStartRate})`),
+          h("span", null, `先行：${stat.frontCount}/${stat.rides} (${stat.frontRate})`),
+          h("span", null, `バイアス適応：${stat.biasMatchedCount}/${stat.biasTargetCount} (${stat.biasAdaptRate})`)
+        ))),
+      filtered.length > 160 && h("p", { className: "lookup-note" }, "表示は先頭160人です。検索すると絞り込めます。")
+    );
+  }
+
+  function BiasJudgementButtons({ value, onChange }) {
+    return h("div", { className: "segmented-control compact" }, BIAS_JUDGEMENT_OPTIONS.map((option) => h("button", {
+      type: "button",
+      key: option,
+      className: value === option ? "selected" : "",
+      onClick: () => onChange(option),
+    }, option)));
+  }
+
+  function JockeyDetailScreen({ selectedJockey, horseRecords, memos, trackBiasNotes, onSaveBiasJudgement }) {
+    const stats = buildJockeyStats(horseRecords, memos, trackBiasNotes);
+    const stat = stats.find((item) => item.jockeyName === selectedJockey);
+    if (!stat) {
+      return h("section", { className: "screen" },
+        h(SectionTitle, { icon: h(Star, { size: 18 }), title: "騎手詳細" }),
+        h(EmptyState, { title: "騎手が見つかりません", text: "騎手成績一覧から選び直してください。" })
+      );
+    }
+
+    return h("section", { className: "screen" },
+      h(SectionTitle, { icon: h(Star, { size: 18 }), title: stat.jockeyName }),
+      h("article", { className: "race-detail-panel" },
+        h("h3", null, "総合成績"),
+        h("p", null, stat.recordText),
+        h("p", null, `騎乗数：${stat.rides}`),
+        h("p", null, `出遅れ率：${stat.slowStartCount}/${stat.rides} (${stat.slowStartRate})`),
+        h("p", null, `先行率：${stat.frontCount}/${stat.rides} (${stat.frontRate})`),
+        h("p", null, `バイアス適応率：${stat.biasMatchedCount}/${stat.biasTargetCount} (${stat.biasAdaptRate})`),
+        h("small", null, `バイアス逆：${stat.biasOppositeCount} / 判別不能：${stat.biasUnknownCount}`)
+      ),
+      h("section", { className: "race-detail-panel" },
+        h("h3", null, "騎乗履歴"),
+        stat.records.length === 0
+          ? h("p", { className: "muted-mini" }, "騎乗履歴はありません")
+          : h("div", { className: "entry-stack" }, stat.records.slice(0, 200).map((record, index) => {
+            const biasNote = findTrackBiasNoteForRecord(trackBiasNotes, record);
+            const tags = safeArray(record.tags);
+            const label = [formatDateSlash(record.raceDate || record.date), record.track || record.racecourse, raceNumberLabel(record.raceNumber), record.raceName].filter(Boolean).join(" ");
+            return h("article", { key: `${record.raceId || label}-${record.horseNumber || record.horseName}-${index}`, className: "record-card" },
+              h("div", { className: "record-main static" },
+                h("div", { className: "record-rank" }, h("strong", null, record.finish || "-")),
+                h("div", { className: "record-content" },
+                  h("h3", null, `${label || "レース未設定"} / ${record.horseName || "馬名未設定"}`),
+                  h("p", null, [
+                    `着順：${record.finish || "-"}`,
+                    `不利タグ：${tags.length ? tags.join("、") : "なし"}`,
+                    `出遅れ：${record.slowStart ? "あり" : "なし"}`,
+                    `先行判定：${record.frontRunning ? "先行" : "非先行"}`,
+                  ].join(" / ")),
+                  h("p", null, `通過：3角${record.corner3 || "-"} / 4角${record.corner4 || "-"}`),
+                  h("div", { className: "track-bias-controls" },
+                    h("span", null, "バイアス判定"),
+                    h(BiasJudgementButtons, {
+                      value: biasNote.biasJudgement || "判別不能",
+                      onChange: (biasJudgement) => onSaveBiasJudgement({ ...biasNote, ...jockeyBiasNoteBase(record), biasJudgement }),
+                    })
+                  )
+                )
+              )
+            );
+          })),
+        stat.records.length > 200 && h("p", { className: "lookup-note" }, `表示は直近200件です。対象：${stat.records.length}件`)
+      )
     );
   }
 
@@ -7438,7 +7681,12 @@ export function createKeibaApp(React, icons) {
                     type: "button",
                     className: note.runningStyle === value ? "selected" : "",
                     onClick: () => notePatch(raceItem, row, { runningStyle: value }),
-                  }, value)))
+                  }, value))),
+                  h("p", { className: "field-label" }, "騎手バイアス判定"),
+                  h(BiasJudgementButtons, {
+                    value: note.biasJudgement || "判別不能",
+                    onChange: (biasJudgement) => notePatch(raceItem, row, { biasJudgement }),
+                  })
                 );
               })
           );
